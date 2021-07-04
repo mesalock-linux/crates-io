@@ -1,7 +1,8 @@
-#![doc(html_root_url = "https://docs.rs/rayon/1.3")]
+#![doc(html_root_url = "https://docs.rs/rayon/1.5")]
 #![deny(missing_debug_implementations)]
 #![deny(missing_docs)]
 #![deny(unreachable_pub)]
+#![warn(rust_2018_idioms)]
 
 //! Data-parallelism library that makes it easy to convert sequential
 //! computations into parallel
@@ -82,9 +83,6 @@
 //!
 //! [faq]: https://github.com/rayon-rs/rayon/blob/master/FAQ.md
 
-#[cfg(test)]
-doc_comment::doctest!("../README.md");
-
 #[macro_use]
 mod delegate;
 
@@ -93,6 +91,7 @@ mod private;
 
 mod split_producer;
 
+pub mod array;
 pub mod collections;
 pub mod iter;
 pub mod option;
@@ -102,6 +101,7 @@ pub mod range_inclusive;
 pub mod result;
 pub mod slice;
 pub mod str;
+pub mod string;
 pub mod vec;
 
 mod math;
@@ -115,7 +115,7 @@ pub use rayon_core::ThreadPool;
 pub use rayon_core::ThreadPoolBuildError;
 pub use rayon_core::ThreadPoolBuilder;
 pub use rayon_core::{current_num_threads, current_thread_index};
+pub use rayon_core::{in_place_scope, scope, Scope};
+pub use rayon_core::{in_place_scope_fifo, scope_fifo, ScopeFifo};
 pub use rayon_core::{join, join_context};
-pub use rayon_core::{scope, Scope};
-pub use rayon_core::{scope_fifo, ScopeFifo};
 pub use rayon_core::{spawn, spawn_fifo};

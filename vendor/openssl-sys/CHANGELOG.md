@@ -2,6 +2,118 @@
 
 ## [Unreleased]
 
+## [v0.9.65] - 2021-06-21
+
+### Fixed
+
+* Restored the accidentally deleted `PEM_read_bio_X509_CRL` function.
+
+## [v0.9.64] - 2021-06-18
+
+### Added
+
+* Added support for OpenSSL 3.x.x.
+* Added `SSL_peek`.
+* Added `ERR_LIB_ASN1` and `ASN1_R_HEADER_TOO_LONG`.
+* Added `d2i_X509_bio`.
+* Added `OBJ_nid2obj`.
+* Added `RAND_add`.
+* Added `SSL_CTX_set_post_handshake_auth`.
+* Added `COMP_get_type`.
+* Added `X509_get_default_cert_file_env`, `X509_get_default_cert_file`, `X509_get_default_cert_dir_env`, and
+    `X509_get_default_cirt_dir`.
+
+## [v0.9.63] - 2021-05-06
+
+### Added
+
+* Added support for LibreSSL 3.3.x.
+
+## [v0.9.62] - 2021-04-28
+
+### Added
+
+* Added support for LibreSSL 3.3.2.
+* Added `DH_set0_key`.
+* Added `EC_POINT_get_affine_coordinates`.
+
+## [v0.9.61] - 2021-03-13
+
+### Added
+
+* Added support for automatic detection of OpenSSL installations via pkgsrc and MacPorts on macOS.
+* Added various `V_ASN1_*` constants.
+* Added `DH_generate_parameters_ex`.
+* Added `EC_POINT_is_at_infinity` and `EC_POINT_is_on_curve`.
+* Added `EVP_CIPHER_nid`.
+* Added `EVP_sm3`.
+* Added `NID_*` constants related to SM3.
+* Added `PKCS7_get0_signers`.
+* Added `EVP_PKEY_CTX_set0_rsa_oaep_label`.
+* Added `ACCESS_DESCRIPTION` and `ACCESS_DESCRIPTION_free`.
+
+## [v0.9.60] - 2020-12-24
+
+### Added
+
+* Added support for the default Homebrew install directory on ARM.
+* Added `EVP_PKEY_CTX_set_rsa_oaep_md` and `EVP_PKEY_CTRL_RSA_OAEP_MD`.
+
+## [v0.9.59] - 2020-12-09
+
+### Added
+
+* Added support for LibreSSL 3.2.x, 3.3.0, and 3.3.1.
+* Added `DH_generate_parameters`, `DH_generate_key`, `DH_compute_key`, and `DH_size`.
+* Added `NID_X25519`, `NID_X448`, `EVP_PKEY_x25519` and `EVP_PKEY_x448`.
+* Added `OBJ_txt2obj`.
+* Added `d2i_PKCS7` and `i2d_PKCS7`.
+* Added `SRTP_AEAD_AES_128_GCM` and `SRTP_AEAD_AES_256_GCM`.
+
+## [v0.9.58] - 2020-06-05
+
+### Added
+
+* Added `SSL_set_mtu`.
+* Added support for LibreSSL 3.2.0.
+* Added `PEM_read_bio_EC_PUBKEY`, `PEM_write_bio_EC_PUBKEY`, `d2i_EC_PUBKEY`, and `i2d_EC_PUBKEY`.
+* Added `EVP_PKEY_encrypt_init`, `EVP_PKEY_encrypt`, `EVP_PKEY_decrypt_init`, `EVP_PKEY_decrypt`,
+    `EVP_PKEY_get_raw_public_key`, `EVP_PKEY_new_raw_public_key`, `EVP_PKEY_get_raw_private_key`,
+    and `EVP_PKEY_new_raw_private_key`.
+* Added `OBJ_sn2nid`.
+
+## [v0.9.57] - 2020-05-24
+
+### Added
+
+* Added support for LibreSSL 3.1.x.
+
+## [v0.9.56] - 2020-05-07
+
+### Fixed
+
+* Fixed vendored builds on windows-gnu targets.
+
+### Added
+
+* Added support for LibreSSL 3.0.0.
+
+## [v0.9.55] - 2020-04-07
+
+### Fixed
+
+* Fixed windows-msvc library names when using OpenSSL from vcpkg.
+
+### Added
+
+* If the `OPENSSL_NO_VENDOR` environment variable is set, vendoring will not be used even if enabled.
+* Added `SSL_CTX_get_verify_mode` and `SSL_get_verify_mode`.
+* Added `SSL_is_init_finished`.
+* Added `SSL_CTX_set_cert_store`.
+* Added `TLS_server_method` and `TLS_client_method`.
+* Added `X509_STORE_get0_objects`.
+* Added `X509_OBJECT_free`, `X509_OBJECT_get_type`, and `X509_OBJECT_get0_X509`.
+
 ## [v0.9.54] - 2020-01-29
 
 ### Added
@@ -101,7 +213,19 @@
 * Added `X509_verify` and `X509_REQ_verify`.
 * Added `EVP_MD_type` and `EVP_GROUP_get_curve_name`.
 
-[Unreleased]: https://github.com/sfackler/rust-openssl/compare/openssl-sys-v0.9.53...master
+[Unreleased]: https://github.com/sfackler/rust-openssl/compare/openssl-sys-v0.9.65...master
+[v0.9.65]: https://github.com/sfackler/rust-openssl/compare/openssl-sys-v0.9.64...openssl-sys-v0.9.65
+[v0.9.64]: https://github.com/sfackler/rust-openssl/compare/openssl-sys-v0.9.63...openssl-sys-v0.9.64
+[v0.9.63]: https://github.com/sfackler/rust-openssl/compare/openssl-sys-v0.9.62...openssl-sys-v0.9.63
+[v0.9.62]: https://github.com/sfackler/rust-openssl/compare/openssl-sys-v0.9.61...openssl-sys-v0.9.62
+[v0.9.61]: https://github.com/sfackler/rust-openssl/compare/openssl-sys-v0.9.60...openssl-sys-v0.9.61
+[v0.9.60]: https://github.com/sfackler/rust-openssl/compare/openssl-sys-v0.9.59...openssl-sys-v0.9.60
+[v0.9.59]: https://github.com/sfackler/rust-openssl/compare/openssl-sys-v0.9.58...openssl-sys-v0.9.59
+[v0.9.58]: https://github.com/sfackler/rust-openssl/compare/openssl-sys-v0.9.57...openssl-sys-v0.9.58
+[v0.9.57]: https://github.com/sfackler/rust-openssl/compare/openssl-sys-v0.9.56...openssl-sys-v0.9.57
+[v0.9.56]: https://github.com/sfackler/rust-openssl/compare/openssl-sys-v0.9.55...openssl-sys-v0.9.56
+[v0.9.55]: https://github.com/sfackler/rust-openssl/compare/openssl-sys-v0.9.54...openssl-sys-v0.9.55
+[v0.9.54]: https://github.com/sfackler/rust-openssl/compare/openssl-sys-v0.9.53...openssl-sys-v0.9.54
 [v0.9.53]: https://github.com/sfackler/rust-openssl/compare/openssl-sys-v0.9.52...openssl-sys-v0.9.53
 [v0.9.52]: https://github.com/sfackler/rust-openssl/compare/openssl-sys-v0.9.51...openssl-sys-v0.9.52
 [v0.9.51]: https://github.com/sfackler/rust-openssl/compare/openssl-sys-v0.9.50...openssl-sys-v0.9.51

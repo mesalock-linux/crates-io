@@ -1,4 +1,4 @@
-#![doc(html_root_url = "https://docs.rs/hyper/0.13.3")]
+#![doc(html_root_url = "https://docs.rs/hyper/0.13.10")]
 #![deny(missing_docs)]
 #![deny(missing_debug_implementations)]
 #![cfg_attr(test, deny(rust_2018_idioms))]
@@ -24,7 +24,7 @@
 //! ## "Low-level"
 //!
 //! hyper is a lower-level HTTP library, meant to be a building block
-//! for libaries and applications.
+//! for libraries and applications.
 //!
 //! If looking for just a convenient HTTP client, consider the
 //! [reqwest](https://crates.io/crates/reqwest) crate.
@@ -43,7 +43,7 @@
 #[doc(hidden)]
 pub use http;
 #[macro_use]
-extern crate log;
+extern crate tracing;
 
 #[cfg(all(test, feature = "nightly"))]
 extern crate test;

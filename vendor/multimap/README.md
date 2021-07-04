@@ -29,15 +29,27 @@ fn main () {
 
 ## Changelog
 
+### 0.8.3
+
+* multimap! marco fixes; allow trailing comma, naming hygiene and create with enough capacity for all elements.
+
+### 0.8.2
+
+* Added ```#![forbid(unsafe_code)]```.
+
+### 0.8.1
+
+* Fixed wrong link to documentation in Cargo.toml.
+
+### 0.8.0
+
+* Added ```MultiMap::insert_many```
+* Added ```MultiMap::insert_many_from_slice```
+
 ### 0.7.0
 
 * Added possibility to replace the default hasher for the underlying ```HashMap```.
 * Fix build warning by removing an unnecessary ```mut```.
-
-### 0.8.0
-
-* Added MultiMap::insert_many
-* Added MultiMap::insert_many_from_slice
 
 ## License
 

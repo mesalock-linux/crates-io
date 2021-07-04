@@ -1,8 +1,12 @@
 #![doc(html_root_url = "https://docs.rs/wasm-bindgen-shared/0.2")]
 
-// The schema is so unstable right now we just force it to change whenever this
-// package's version changes, which happens on all publishes.
-pub const SCHEMA_VERSION: &str = env!("CARGO_PKG_VERSION");
+#[cfg(test)]
+mod schema_hash_approval;
+
+// This gets changed whenever our schema changes.
+// At this time versions of wasm-bindgen and wasm-bindgen-cli are required to have the exact same
+// SCHEMA_VERSION in order to work together.
+pub const SCHEMA_VERSION: &str = "0.2.74";
 
 #[macro_export]
 macro_rules! shared_api {
@@ -22,7 +26,7 @@ macro_rules! shared_api {
 
         struct Import<'a> {
             module: ImportModule<'a>,
-            js_namespace: Option<&'a str>,
+            js_namespace: Option<Vec<String>>,
             kind: ImportKind<'a>,
         }
 
@@ -106,6 +110,7 @@ macro_rules! shared_api {
         struct EnumVariant<'a> {
             name: &'a str,
             value: u32,
+            comments: Vec<&'a str>,
         }
 
         struct Function<'a> {

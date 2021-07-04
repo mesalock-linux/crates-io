@@ -7,18 +7,22 @@
 //!
 //! If don't have need to manage connections yourself, consider using the
 //! higher-level [Client](super) API.
+
+use std::error::Error as StdError;
 use std::fmt;
 use std::mem;
 use std::sync::Arc;
+#[cfg(feature = "runtime")]
+use std::time::Duration;
 
 use bytes::Bytes;
 use futures_util::future::{self, Either, FutureExt as _};
-use pin_project::{pin_project, project};
+use pin_project::pin_project;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tower_service::Service;
 
 use super::dispatch;
-use crate::body::Payload;
+use crate::body::HttpBody;
 use crate::common::{task, BoxSendFuture, Exec, Executor, Future, Pin, Poll};
 use crate::proto;
 use crate::upgrade::Upgraded;
@@ -26,10 +30,10 @@ use crate::{Body, Request, Response};
 
 type Http1Dispatcher<T, B, R> = proto::dispatch::Dispatcher<proto::dispatch::Client<B>, B, T, R>;
 
-#[pin_project]
+#[pin_project(project = ProtoClientProj)]
 enum ProtoClient<T, B>
 where
-    B: Payload,
+    B: HttpBody,
 {
     H1(#[pin] Http1Dispatcher<T, B, proto::h1::ClientTransaction>),
     H2(#[pin] proto::h2::ClientTask<B>),
@@ -60,7 +64,7 @@ pub struct SendRequest<B> {
 pub struct Connection<T, B>
 where
     T: AsyncRead + AsyncWrite + Send + 'static,
-    B: Payload + 'static,
+    B: HttpBody + 'static,
 {
     inner: Option<ProtoClient<T, B>>,
 }
@@ -71,7 +75,7 @@ where
 #[derive(Clone, Debug)]
 pub struct Builder {
     pub(super) exec: Exec,
-    h1_writev: bool,
+    h1_writev: Option<bool>,
     h1_title_case_headers: bool,
     h1_read_buf_exact_size: Option<usize>,
     h1_max_buf_size: Option<usize>,
@@ -157,7 +161,7 @@ impl<B> SendRequest<B> {
 
 impl<B> SendRequest<B>
 where
-    B: Payload + 'static,
+    B: HttpBody + 'static,
 {
     /// Sends a `Request` on the associated connection.
     ///
@@ -242,7 +246,7 @@ where
 
 impl<B> Service<Request<B>> for SendRequest<B>
 where
-    B: Payload + 'static,
+    B: HttpBody + 'static,
 {
     type Response = Response<Body>;
     type Error = crate::Error;
@@ -277,7 +281,7 @@ impl<B> Http2SendRequest<B> {
 
 impl<B> Http2SendRequest<B>
 where
-    B: Payload + 'static,
+    B: HttpBody + 'static,
 {
     pub(super) fn send_request_retryable(
         &mut self,
@@ -325,7 +329,9 @@ impl<B> Clone for Http2SendRequest<B> {
 impl<T, B> Connection<T, B>
 where
     T: AsyncRead + AsyncWrite + Unpin + Send + 'static,
-    B: Payload + Unpin + 'static,
+    B: HttpBody + Unpin + Send + 'static,
+    B::Data: Send,
+    B::Error: Into<Box<dyn StdError + Send + Sync>>,
 {
     /// Return the inner IO object, and additional information.
     ///
@@ -377,7 +383,9 @@ where
 impl<T, B> Future for Connection<T, B>
 where
     T: AsyncRead + AsyncWrite + Unpin + Send + 'static,
-    B: Payload + 'static,
+    B: HttpBody + Send + 'static,
+    B::Data: Send,
+    B::Error: Into<Box<dyn StdError + Send + Sync>>,
 {
     type Output = crate::Result<()>;
 
@@ -401,7 +409,7 @@ where
 impl<T, B> fmt::Debug for Connection<T, B>
 where
     T: AsyncRead + AsyncWrite + fmt::Debug + Send + 'static,
-    B: Payload + 'static,
+    B: HttpBody + 'static,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Connection").finish()
@@ -416,7 +424,7 @@ impl Builder {
     pub fn new() -> Builder {
         Builder {
             exec: Exec::Default,
-            h1_writev: true,
+            h1_writev: None,
             h1_read_buf_exact_size: None,
             h1_title_case_headers: false,
             h1_max_buf_size: None,
@@ -435,7 +443,7 @@ impl Builder {
     }
 
     pub(super) fn h1_writev(&mut self, enabled: bool) -> &mut Builder {
-        self.h1_writev = enabled;
+        self.h1_writev = Some(enabled);
         self
     }
 
@@ -517,6 +525,71 @@ impl Builder {
         self
     }
 
+    /// Sets the maximum frame size to use for HTTP2.
+    ///
+    /// Passing `None` will do nothing.
+    ///
+    /// If not set, hyper will use a default.
+    pub fn http2_max_frame_size(&mut self, sz: impl Into<Option<u32>>) -> &mut Self {
+        if let Some(sz) = sz.into() {
+            self.h2_builder.max_frame_size = sz;
+        }
+        self
+    }
+
+    /// Sets an interval for HTTP2 Ping frames should be sent to keep a
+    /// connection alive.
+    ///
+    /// Pass `None` to disable HTTP2 keep-alive.
+    ///
+    /// Default is currently disabled.
+    ///
+    /// # Cargo Feature
+    ///
+    /// Requires the `runtime` cargo feature to be enabled.
+    #[cfg(feature = "runtime")]
+    pub fn http2_keep_alive_interval(
+        &mut self,
+        interval: impl Into<Option<Duration>>,
+    ) -> &mut Self {
+        self.h2_builder.keep_alive_interval = interval.into();
+        self
+    }
+
+    /// Sets a timeout for receiving an acknowledgement of the keep-alive ping.
+    ///
+    /// If the ping is not acknowledged within the timeout, the connection will
+    /// be closed. Does nothing if `http2_keep_alive_interval` is disabled.
+    ///
+    /// Default is 20 seconds.
+    ///
+    /// # Cargo Feature
+    ///
+    /// Requires the `runtime` cargo feature to be enabled.
+    #[cfg(feature = "runtime")]
+    pub fn http2_keep_alive_timeout(&mut self, timeout: Duration) -> &mut Self {
+        self.h2_builder.keep_alive_timeout = timeout;
+        self
+    }
+
+    /// Sets whether HTTP2 keep-alive should apply while the connection is idle.
+    ///
+    /// If disabled, keep-alive pings are only sent while there are open
+    /// request/responses streams. If enabled, pings are also sent when no
+    /// streams are active. Does nothing if `http2_keep_alive_interval` is
+    /// disabled.
+    ///
+    /// Default is `false`.
+    ///
+    /// # Cargo Feature
+    ///
+    /// Requires the `runtime` cargo feature to be enabled.
+    #[cfg(feature = "runtime")]
+    pub fn http2_keep_alive_while_idle(&mut self, enabled: bool) -> &mut Self {
+        self.h2_builder.keep_alive_while_idle = enabled;
+        self
+    }
+
     /// Constructs a connection with the configured options and IO.
     pub fn handshake<T, B>(
         &self,
@@ -524,7 +597,9 @@ impl Builder {
     ) -> impl Future<Output = crate::Result<(SendRequest<B>, Connection<T, B>)>>
     where
         T: AsyncRead + AsyncWrite + Unpin + Send + 'static,
-        B: Payload + 'static,
+        B: HttpBody + 'static,
+        B::Data: Send,
+        B::Error: Into<Box<dyn StdError + Send + Sync>>,
     {
         let opts = self.clone();
 
@@ -534,8 +609,12 @@ impl Builder {
             let (tx, rx) = dispatch::channel();
             let proto = if !opts.http2 {
                 let mut conn = proto::Conn::new(io);
-                if !opts.h1_writev {
-                    conn.set_write_strategy_flatten();
+                if let Some(writev) = opts.h1_writev {
+                    if writev {
+                        conn.set_write_strategy_queue();
+                    } else {
+                        conn.set_write_strategy_flatten();
+                    }
                 }
                 if opts.h1_title_case_headers {
                     conn.set_title_case_headers();
@@ -596,16 +675,16 @@ impl fmt::Debug for ResponseFuture {
 impl<T, B> Future for ProtoClient<T, B>
 where
     T: AsyncRead + AsyncWrite + Send + Unpin + 'static,
-    B: Payload + 'static,
+    B: HttpBody + Send + 'static,
+    B::Data: Send,
+    B::Error: Into<Box<dyn StdError + Send + Sync>>,
 {
     type Output = crate::Result<proto::Dispatched>;
 
-    #[project]
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
-        #[project]
         match self.project() {
-            ProtoClient::H1(c) => c.poll(cx),
-            ProtoClient::H2(c) => c.poll(cx),
+            ProtoClientProj::H1(c) => c.poll(cx),
+            ProtoClientProj::H2(c) => c.poll(cx),
         }
     }
 }
@@ -622,7 +701,8 @@ impl<B: Send> AssertSendSync for SendRequest<B> {}
 impl<T: Send, B: Send> AssertSend for Connection<T, B>
 where
     T: AsyncRead + AsyncWrite + Send + 'static,
-    B: Payload + 'static,
+    B: HttpBody + 'static,
+    B::Data: Send,
 {
 }
 
@@ -630,7 +710,7 @@ where
 impl<T: Send + Sync, B: Send + Sync> AssertSendSync for Connection<T, B>
 where
     T: AsyncRead + AsyncWrite + Send + 'static,
-    B: Payload + 'static,
+    B: HttpBody + 'static,
     B::Data: Send + Sync + 'static,
 {
 }

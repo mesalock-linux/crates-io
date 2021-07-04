@@ -2,7 +2,7 @@
 //!
 //! See [`DelayQueue`] for more details.
 //!
-//! [`DelayQueue`]: struct.DelayQueue.html
+//! [`DelayQueue`]: struct@DelayQueue
 
 use crate::time::wheel::{self, Wheel};
 use crate::time::{delay_until, Delay, Duration, Error, Instant};
@@ -27,13 +27,13 @@ use std::task::{self, Poll};
 /// which it should be yielded back.
 ///
 /// Once delays have been configured, the `DelayQueue` is used via its
-/// [`Stream`] implementation. [`poll`] is called. If an entry has reached its
+/// [`Stream`] implementation. [`poll_expired`] is called. If an entry has reached its
 /// deadline, it is returned. If not, `Poll::Pending` indicating that the
 /// current task will be notified once the deadline has been reached.
 ///
 /// # `Stream` implementation
 ///
-/// Items are retrieved from the queue via [`Stream::poll`]. If no delays have
+/// Items are retrieved from the queue via [`DelayQueue::poll_expired`]. If no delays have
 /// expired, no items are returned. In this case, `NotReady` is returned and the
 /// current task is registered to be notified once the next item's delay has
 /// expired.
@@ -50,13 +50,12 @@ use std::task::{self, Poll};
 ///
 /// # Implementation
 ///
-/// The `DelayQueue` is backed by the same hashed timing wheel implementation as
-/// [`Timer`] as such, it offers the same performance benefits. See [`Timer`]
-/// for further implementation notes.
+/// The [`DelayQueue`] is backed by a separate instance of the same timer wheel used internally by
+/// Tokio's standalone timer utilities such as [`delay_for`]. Because of this, it offers the same
+/// performance and scalability benefits.
 ///
-/// State associated with each entry is stored in a [`slab`]. This allows
-/// amortizing the cost of allocation. Space created for expired entries is
-/// reused when inserting new entries.
+/// State associated with each entry is stored in a [`slab`]. This amortizes the cost of allocation,
+/// and allows reuse of the memory allocated for expired entires.
 ///
 /// Capacity can be checked using [`capacity`] and allocated preemptively by using
 /// the [`reserve`] method.
@@ -112,16 +111,17 @@ use std::task::{self, Poll};
 /// }
 /// ```
 ///
-/// [`insert`]: #method.insert
-/// [`insert_at`]: #method.insert_at
-/// [`Key`]: struct.Key.html
+/// [`insert`]: method@Self::insert
+/// [`insert_at`]: method@Self::insert_at
+/// [`Key`]: struct@Key
 /// [`Stream`]: https://docs.rs/futures/0.1/futures/stream/trait.Stream.html
-/// [`poll`]: #method.poll
-/// [`Stream::poll`]: #method.poll
-/// [`Timer`]: ../struct.Timer.html
-/// [`slab`]: https://docs.rs/slab
-/// [`capacity`]: #method.capacity
-/// [`reserve`]: #method.reserve
+/// [`poll_expired`]: method@Self::poll_expired
+/// [`Stream::poll_expired`]: method@Self::poll_expired
+/// [`DelayQueue`]: struct@DelayQueue
+/// [`delay_for`]: fn@super::delay_for
+/// [`slab`]: slab
+/// [`capacity`]: method@Self::capacity
+/// [`reserve`]: method@Self::reserve
 #[derive(Debug)]
 pub struct DelayQueue<T> {
     /// Stores data associated with entries
@@ -146,9 +146,9 @@ pub struct DelayQueue<T> {
 
 /// An entry in `DelayQueue` that has expired and removed.
 ///
-/// Values are returned by [`DelayQueue::poll`].
+/// Values are returned by [`DelayQueue::poll_expired`].
 ///
-/// [`DelayQueue::poll`]: struct.DelayQueue.html#method.poll
+/// [`DelayQueue::poll_expired`]: method@DelayQueue::poll_expired
 #[derive(Debug)]
 pub struct Expired<T> {
     /// The data stored in the queue
@@ -166,8 +166,8 @@ pub struct Expired<T> {
 /// Instances of `Key` are returned by [`DelayQueue::insert`]. See [`DelayQueue`]
 /// documentation for more details.
 ///
-/// [`DelayQueue`]: struct.DelayQueue.html
-/// [`DelayQueue::insert`]: struct.DelayQueue.html#method.insert
+/// [`DelayQueue`]: struct@DelayQueue
+/// [`DelayQueue::insert`]: method@DelayQueue::insert
 #[derive(Debug, Clone)]
 pub struct Key {
     index: usize,
@@ -260,12 +260,12 @@ impl<T> DelayQueue<T> {
     /// of a `Duration`.
     ///
     /// `value` is stored in the queue until `when` is reached. At which point,
-    /// `value` will be returned from [`poll`]. If `when` has already been
+    /// `value` will be returned from [`poll_expired`]. If `when` has already been
     /// reached, then `value` is immediately made available to poll.
     ///
     /// The return value represents the insertion and is used at an argument to
     /// [`remove`] and [`reset`]. Note that [`Key`] is token and is reused once
-    /// `value` is removed from the queue either by calling [`poll`] after
+    /// `value` is removed from the queue either by calling [`poll_expired`] after
     /// `when` is reached or by calling [`remove`]. At this point, the caller
     /// must take care to not use the returned [`Key`] again as it may reference
     /// a different item in the queue.
@@ -295,10 +295,10 @@ impl<T> DelayQueue<T> {
     /// # }
     /// ```
     ///
-    /// [`poll`]: #method.poll
-    /// [`remove`]: #method.remove
-    /// [`reset`]: #method.reset
-    /// [`Key`]: struct.Key.html
+    /// [`poll_expired`]: method@Self::poll_expired
+    /// [`remove`]: method@Self::remove
+    /// [`reset`]: method@Self::reset
+    /// [`Key`]: struct@Key
     /// [type]: #
     pub fn insert_at(&mut self, value: T, when: Instant) -> Key {
         assert!(self.slab.len() < MAX_ENTRIES, "max entries exceeded");
@@ -367,12 +367,12 @@ impl<T> DelayQueue<T> {
     /// instead of an `Instant`.
     ///
     /// `value` is stored in the queue until `when` is reached. At which point,
-    /// `value` will be returned from [`poll`]. If `when` has already been
+    /// `value` will be returned from [`poll_expired`]. If `when` has already been
     /// reached, then `value` is immediately made available to poll.
     ///
     /// The return value represents the insertion and is used at an argument to
     /// [`remove`] and [`reset`]. Note that [`Key`] is token and is reused once
-    /// `value` is removed from the queue either by calling [`poll`] after
+    /// `value` is removed from the queue either by calling [`poll_expired`] after
     /// `when` is reached or by calling [`remove`]. At this point, the caller
     /// must take care to not use the returned [`Key`] again as it may reference
     /// a different item in the queue.
@@ -403,10 +403,10 @@ impl<T> DelayQueue<T> {
     /// # }
     /// ```
     ///
-    /// [`poll`]: #method.poll
-    /// [`remove`]: #method.remove
-    /// [`reset`]: #method.reset
-    /// [`Key`]: struct.Key.html
+    /// [`poll_expired`]: method@Self::poll_expired
+    /// [`remove`]: method@Self::remove
+    /// [`reset`]: method@Self::reset
+    /// [`Key`]: struct@Key
     /// [type]: #
     pub fn insert(&mut self, value: T, timeout: Duration) -> Key {
         self.insert_at(value, Instant::now() + timeout)
@@ -424,6 +424,22 @@ impl<T> DelayQueue<T> {
                 self.expired.push(key, &mut self.slab);
             }
             Err((_, err)) => panic!("invalid deadline; err={:?}", err),
+        }
+    }
+
+    /// Removes the key fom the expired queue or the timer wheel
+    /// depending on its expiration status
+    ///
+    /// # Panics
+    /// Panics if the key is not contained in the expired queue or the wheel
+    fn remove_key(&mut self, key: &Key) {
+        use crate::time::wheel::Stack;
+
+        // Special case the `expired` queue
+        if self.slab[key.index].expired {
+            self.expired.remove(&key.index, &mut self.slab);
+        } else {
+            self.wheel.remove(&key.index, &mut self.slab);
         }
     }
 
@@ -456,15 +472,7 @@ impl<T> DelayQueue<T> {
     /// # }
     /// ```
     pub fn remove(&mut self, key: &Key) -> Expired<T> {
-        use crate::time::wheel::Stack;
-
-        // Special case the `expired` queue
-        if self.slab[key.index].expired {
-            self.expired.remove(&key.index, &mut self.slab);
-        } else {
-            self.wheel.remove(&key.index, &mut self.slab);
-        }
-
+        self.remove_key(key);
         let data = self.slab.remove(key.index);
 
         Expired {
@@ -508,7 +516,7 @@ impl<T> DelayQueue<T> {
     /// # }
     /// ```
     pub fn reset_at(&mut self, key: &Key, when: Instant) {
-        self.wheel.remove(&key.index, &mut self.slab);
+        self.remove_key(key);
 
         // Normalize the deadline. Values cannot be set to expire in the past.
         let when = self.normalize_deadline(when);
@@ -570,11 +578,11 @@ impl<T> DelayQueue<T> {
 
     /// Clears the queue, removing all items.
     ///
-    /// After calling `clear`, [`poll`] will return `Ok(Ready(None))`.
+    /// After calling `clear`, [`poll_expired`] will return `Ok(Ready(None))`.
     ///
     /// Note that this method has no effect on the allocated capacity.
     ///
-    /// [`poll`]: #method.poll
+    /// [`poll_expired`]: method@Self::poll_expired
     ///
     /// # Examples
     ///
@@ -721,15 +729,16 @@ impl<T> DelayQueue<T> {
                 self.poll = wheel::Poll::new(now);
             }
 
-            self.delay = None;
+            // We poll the wheel to get the next value out before finding the next deadline.
+            let wheel_idx = self.wheel.poll(&mut self.poll, &mut self.slab);
 
-            if let Some(idx) = self.wheel.poll(&mut self.poll, &mut self.slab) {
+            self.delay = self.next_deadline().map(delay_until);
+
+            if let Some(idx) = wheel_idx {
                 return Poll::Ready(Some(Ok(idx)));
             }
 
-            if let Some(deadline) = self.next_deadline() {
-                self.delay = Some(delay_until(deadline));
-            } else {
+            if self.delay.is_none() {
                 return Poll::Ready(None);
             }
         }
@@ -877,5 +886,10 @@ impl<T> Expired<T> {
     /// Consumes `self` and returns the inner value.
     pub fn into_inner(self) -> T {
         self.data
+    }
+
+    /// Returns the deadline that the expiration was set to.
+    pub fn deadline(&self) -> Instant {
+        self.deadline
     }
 }

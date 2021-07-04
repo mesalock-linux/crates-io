@@ -137,6 +137,9 @@ fn test_fsync_error() {
 // in Travis's version of glibc or Linux.  Either way, we must skip the test.
 // https://github.com/nix-rust/nix/issues/1099
 #[cfg_attr(target_os = "linux", ignore)]
+// On Cirrus, aio_suspend is failing with EINVAL
+// https://github.com/nix-rust/nix/issues/1361
+#[cfg_attr(target_os = "macos", ignore)]
 fn test_aio_suspend() {
     const INITIAL: &[u8] = b"abcdef123456";
     const WBUF: &[u8] = b"CDEFG";
@@ -164,7 +167,12 @@ fn test_aio_suspend() {
     loop {
         {
             let cbbuf = [&wcb, &rcb];
-            assert!(aio_suspend(&cbbuf[..], Some(timeout)).is_ok());
+            let r = aio_suspend(&cbbuf[..], Some(timeout));
+            match r {
+                Err(Error::Sys(Errno::EINTR)) => continue,
+                Err(e) => panic!("aio_suspend returned {:?}", e),
+                Ok(_) => ()
+            };
         }
         if rcb.error() != Err(Error::from(Errno::EINPROGRESS)) &&
            wcb.error() != Err(Error::from(Errno::EINPROGRESS)) {
@@ -445,7 +453,7 @@ extern fn sigfunc(_: c_int) {
 #[test]
 #[cfg_attr(any(all(target_env = "musl", target_arch = "x86_64"), target_arch = "mips", target_arch = "mips64"), ignore)]
 fn test_write_sigev_signal() {
-    let _m = ::SIGNAL_MTX.lock().expect("Mutex got poisoned by another test");
+    let _m = crate::SIGNAL_MTX.lock().expect("Mutex got poisoned by another test");
     let sa = SigAction::new(SigHandler::Handler(sigfunc),
                             SaFlags::SA_RESETHAND,
                             SigSet::empty());
@@ -583,7 +591,7 @@ fn test_liocb_listio_nowait() {
 #[cfg(not(any(target_os = "ios", target_os = "macos")))]
 #[cfg_attr(any(target_arch = "mips", target_arch = "mips64", target_env = "musl"), ignore)]
 fn test_liocb_listio_signal() {
-    let _m = ::SIGNAL_MTX.lock().expect("Mutex got poisoned by another test");
+    let _m = crate::SIGNAL_MTX.lock().expect("Mutex got poisoned by another test");
     const INITIAL: &[u8] = b"abcdef123456";
     const WBUF: &[u8] = b"CDEF";
     let mut rbuf = vec![0; 4];

@@ -5,10 +5,7 @@
 // It cannot be included in the published code because this lints have false positives in the minimum required version.
 #![cfg_attr(test, warn(single_use_lifetimes))]
 #![warn(clippy::all)]
-
 #![doc(test(attr(deny(warnings), allow(dead_code, unused_assignments, unused_variables))))]
-
-#![doc(html_root_url = "https://docs.rs/futures-join-macro/0.3.0")]
 
 // Since https://github.com/rust-lang/cargo/pull/7700 `proc_macro` is part of the prelude for
 // proc-macro crates, but to support older compilers we still need this explicit `extern crate`.
@@ -16,31 +13,42 @@
 extern crate proc_macro;
 
 use proc_macro::TokenStream;
-use proc_macro_hack::proc_macro_hack;
 
+mod executor;
 mod join;
 mod select;
 
 /// The `join!` macro.
-#[proc_macro_hack]
-pub fn join(input: TokenStream) -> TokenStream {
+#[cfg_attr(fn_like_proc_macro, proc_macro)]
+#[cfg_attr(not(fn_like_proc_macro), proc_macro_hack::proc_macro_hack)]
+pub fn join_internal(input: TokenStream) -> TokenStream {
     crate::join::join(input)
 }
 
 /// The `try_join!` macro.
-#[proc_macro_hack]
-pub fn try_join(input: TokenStream) -> TokenStream {
+#[cfg_attr(fn_like_proc_macro, proc_macro)]
+#[cfg_attr(not(fn_like_proc_macro), proc_macro_hack::proc_macro_hack)]
+pub fn try_join_internal(input: TokenStream) -> TokenStream {
     crate::join::try_join(input)
 }
 
 /// The `select!` macro.
-#[proc_macro_hack]
-pub fn select(input: TokenStream) -> TokenStream {
+#[cfg_attr(fn_like_proc_macro, proc_macro)]
+#[cfg_attr(not(fn_like_proc_macro), proc_macro_hack::proc_macro_hack)]
+pub fn select_internal(input: TokenStream) -> TokenStream {
     crate::select::select(input)
 }
 
 /// The `select_biased!` macro.
-#[proc_macro_hack]
-pub fn select_biased(input: TokenStream) -> TokenStream {
+#[cfg_attr(fn_like_proc_macro, proc_macro)]
+#[cfg_attr(not(fn_like_proc_macro), proc_macro_hack::proc_macro_hack)]
+pub fn select_biased_internal(input: TokenStream) -> TokenStream {
     crate::select::select_biased(input)
+}
+
+// TODO: Change this to doc comment once rustdoc bug fixed.
+// The `test` attribute.
+#[proc_macro_attribute]
+pub fn test_internal(input: TokenStream, item: TokenStream) -> TokenStream {
+    crate::executor::test(input, item)
 }

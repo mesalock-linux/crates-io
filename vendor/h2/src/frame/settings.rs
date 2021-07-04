@@ -99,13 +99,23 @@ impl Settings {
         self.max_header_list_size = size;
     }
 
-    pub fn is_push_enabled(&self) -> bool {
-        self.enable_push.unwrap_or(1) != 0
+    pub fn is_push_enabled(&self) -> Option<bool> {
+        self.enable_push.map(|val| val != 0)
     }
 
     pub fn set_enable_push(&mut self, enable: bool) {
         self.enable_push = Some(enable as u32);
     }
+
+    pub fn header_table_size(&self) -> Option<u32> {
+        self.header_table_size
+    }
+
+    /*
+    pub fn set_header_table_size(&mut self, size: Option<u32>) {
+        self.header_table_size = size;
+    }
+    */
 
     pub fn load(head: Head, payload: &[u8]) -> Result<Settings, Error> {
         use self::Setting::*;
@@ -131,7 +141,7 @@ impl Settings {
 
         // Ensure the payload length is correct, each setting is 6 bytes long.
         if payload.len() % 6 != 0 {
-            log::debug!("invalid settings payload length; len={:?}", payload.len());
+            tracing::debug!("invalid settings payload length; len={:?}", payload.len());
             return Err(Error::InvalidPayloadAckSettings);
         }
 
@@ -189,13 +199,13 @@ impl Settings {
         let head = Head::new(Kind::Settings, self.flags.into(), StreamId::zero());
         let payload_len = self.payload_len();
 
-        log::trace!("encoding SETTINGS; len={}", payload_len);
+        tracing::trace!("encoding SETTINGS; len={}", payload_len);
 
         head.encode(payload_len, dst);
 
         // Encode the settings
         self.for_each(|setting| {
-            log::trace!("encoding setting; val={:?}", setting);
+            tracing::trace!("encoding setting; val={:?}", setting);
             setting.encode(dst)
         });
     }

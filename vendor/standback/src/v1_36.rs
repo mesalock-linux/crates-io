@@ -5,19 +5,13 @@ mod waker;
 
 use core::fmt;
 
-pub use self::{
-    iterator_copied::{Copied, Iterator_v1_36},
-    maybe_uninit::MaybeUninit,
-    poll::Poll,
-    waker::{Context, RawWaker, RawWakerVTable, Waker},
-};
+pub use self::iterator_copied::{Copied, Iterator_v1_36};
+pub use self::maybe_uninit::MaybeUninit;
+pub use self::poll::Poll;
+pub use self::waker::{Context, RawWaker, RawWakerVTable, Waker};
+use crate::traits::Sealed;
 
-mod private {
-    pub trait Sealed {}
-    impl Sealed for str {}
-}
-
-pub trait str_v1_36: private::Sealed {
+pub trait str_v1_36: Sealed<str> {
     fn as_mut_ptr(&mut self) -> *mut u8;
 }
 

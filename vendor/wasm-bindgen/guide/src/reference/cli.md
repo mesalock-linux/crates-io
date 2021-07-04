@@ -4,10 +4,11 @@ The `wasm-bindgen` command line tool has a number of options available to it to
 tweak the JavaScript that is generated. The most up-to-date set of flags can
 always be listed via `wasm-bindgen --help`.
 
-> Note: usually, one should use a [`wasm-pack`-based workflow][wasm-pack] rather
-> than running the `wasm-bindgen` command line tool by hand.
+## Installation
 
-[wasm-pack]: https://github.com/rustwasm/wasm-pack
+```
+cargo install -f wasm-bindgen-cli
+```
 
 ## Usage
 
@@ -77,3 +78,24 @@ sections.
 When generating bundler-compatible code (see the section on [deployment]) this
 indicates that the bundled code is always intended to go into a browser so a few
 checks for Node.js can be elided.
+
+### `--weak-refs`
+
+Enables usage of the [TC39 Weak References
+proposal](https://github.com/tc39/proposal-weakrefs), ensuring that all Rust
+memory is eventually deallocated regardless of whether you're calling `free` or
+not. This is off-by-default while we're waiting for support to percolate into
+all major browsers. For more information see the [documentation about weak
+references](./weak-references.md).
+
+### `--reference-types`
+
+Enables usage of the [WebAssembly References Types
+proposal](https://github.com/webassembly/reference-types) proposal, meaning that
+the WebAssembly binary will use `externref` when importing and exporting
+functions that work with `JsValue`. For more information see the [documentation
+about reference types](./reference-types.md).
+
+### `--omit-default-module-path`
+
+Don't add WebAssembly fallback imports in generated JavaScript.

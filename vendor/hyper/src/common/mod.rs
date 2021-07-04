@@ -13,6 +13,8 @@ pub(crate) mod exec;
 pub(crate) mod io;
 mod lazy;
 mod never;
+#[cfg(feature = "stream")]
+pub(crate) mod sync_wrapper;
 pub(crate) mod task;
 pub(crate) mod watch;
 

@@ -2,12 +2,12 @@
 //!
 //! [Further reading and details on the C API](http://man7.org/linux/man-pages/man7/mq_overview.7.html)
 
-use Result;
-use errno::Errno;
+use crate::Result;
+use crate::errno::Errno;
 
-use libc::{self, c_char, c_long, mqd_t, size_t};
+use libc::{self, c_char, mqd_t, size_t};
 use std::ffi::CString;
-use sys::stat::Mode;
+use crate::sys::stat::Mode;
 use std::mem;
 
 libc_bitflags!{
@@ -34,11 +34,18 @@ pub struct MqAttr {
     mq_attr: libc::mq_attr,
 }
 
+// x32 compatibility
+// See https://sourceware.org/bugzilla/show_bug.cgi?id=21279
+#[cfg(all(target_arch = "x86_64", target_pointer_width = "32"))]
+pub type mq_attr_member_t = i64;
+#[cfg(not(all(target_arch = "x86_64", target_pointer_width = "32")))]
+pub type mq_attr_member_t = libc::c_long;
+
 impl MqAttr {
-    pub fn new(mq_flags: c_long,
-               mq_maxmsg: c_long,
-               mq_msgsize: c_long,
-               mq_curmsgs: c_long)
+    pub fn new(mq_flags: mq_attr_member_t,
+               mq_maxmsg: mq_attr_member_t,
+               mq_msgsize: mq_attr_member_t,
+               mq_curmsgs: mq_attr_member_t)
                -> MqAttr
     {
         let mut attr = mem::MaybeUninit::<libc::mq_attr>::uninit();
@@ -52,7 +59,7 @@ impl MqAttr {
         }
     }
 
-    pub fn flags(&self) -> c_long {
+    pub fn flags(&self) -> mq_attr_member_t {
         self.mq_attr.mq_flags
     }
 }
@@ -150,7 +157,7 @@ pub fn mq_setattr(mqd: mqd_t, newattr: &MqAttr) -> Result<MqAttr> {
 /// Returns the old attributes
 pub fn mq_set_nonblock(mqd: mqd_t) -> Result<MqAttr> {
     let oldattr = mq_getattr(mqd)?;
-    let newattr = MqAttr::new(c_long::from(MQ_OFlag::O_NONBLOCK.bits()),
+    let newattr = MqAttr::new(mq_attr_member_t::from(MQ_OFlag::O_NONBLOCK.bits()),
                               oldattr.mq_attr.mq_maxmsg,
                               oldattr.mq_attr.mq_msgsize,
                               oldattr.mq_attr.mq_curmsgs);

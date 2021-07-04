@@ -20,7 +20,8 @@ unsafe impl Send for SecKeychainItem {}
 
 // FIXME
 impl fmt::Debug for SecKeychainItem {
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+    #[cold]
+    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt.write_str("SecKeychainItem")
     }
 }

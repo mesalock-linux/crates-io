@@ -11,8 +11,10 @@ use futures_util::TryStreamExt;
 use http::HeaderMap;
 use http_body::{Body as HttpBody, SizeHint};
 
+#[cfg(feature = "stream")]
+use crate::common::sync_wrapper::SyncWrapper;
 use crate::common::{task, watch, Future, Never, Pin, Poll};
-use crate::proto::h2::bdp;
+use crate::proto::h2::ping;
 use crate::proto::DecodedLength;
 use crate::upgrade::OnUpgrade;
 
@@ -38,17 +40,15 @@ enum Kind {
         rx: mpsc::Receiver<Result<Bytes, crate::Error>>,
     },
     H2 {
-        bdp: bdp::Sampler,
+        ping: ping::Recorder,
         content_length: DecodedLength,
         recv: h2::RecvStream,
     },
-    // NOTE: This requires `Sync` because of how easy it is to use `await`
-    // while a borrow of a `Request<Body>` exists.
-    //
-    // See https://github.com/rust-lang/rust/issues/57017
     #[cfg(feature = "stream")]
     Wrapped(
-        Pin<Box<dyn Stream<Item = Result<Bytes, Box<dyn StdError + Send + Sync>>> + Send + Sync>>,
+        SyncWrapper<
+            Pin<Box<dyn Stream<Item = Result<Bytes, Box<dyn StdError + Send + Sync>>> + Send>>,
+        >,
     ),
 }
 
@@ -76,10 +76,19 @@ enum DelayEof {
     Eof(DelayEofUntil),
 }
 
-/// A sender half used with `Body::channel()`.
+/// A sender half created through [`Body::channel()`].
 ///
-/// Useful when wanting to stream chunks from another thread. See
-/// [`Body::channel`](Body::channel) for more.
+/// Useful when wanting to stream chunks from another thread.
+///
+/// ## Body Closing
+///
+/// Note that the request body will always be closed normally when the sender is dropped (meaning
+/// that the empty terminating chunk will be sent to the remote). If you desire to close the
+/// connection with an incomplete response (e.g. in the case of an error during asynchronous
+/// processing), call the [`Sender::abort()`] method to abort the body in an abnormal fashion.
+///
+/// [`Body::channel()`]: struct.Body.html#method.channel
+/// [`Sender::abort()`]: struct.Sender.html#method.abort
 #[must_use = "Sender does nothing unless sent on"]
 pub struct Sender {
     want_rx: watch::Receiver,
@@ -156,12 +165,12 @@ impl Body {
     #[cfg(feature = "stream")]
     pub fn wrap_stream<S, O, E>(stream: S) -> Body
     where
-        S: Stream<Item = Result<O, E>> + Send + Sync + 'static,
+        S: Stream<Item = Result<O, E>> + Send + 'static,
         O: Into<Bytes> + 'static,
         E: Into<Box<dyn StdError + Send + Sync>> + 'static,
     {
         let mapped = stream.map_ok(Into::into).map_err(Into::into);
-        Body::new(Kind::Wrapped(Box::pin(mapped)))
+        Body::new(Kind::Wrapped(SyncWrapper::new(Box::pin(mapped))))
     }
 
     /// Converts this `Body` into a `Future` of a pending HTTP upgrade.
@@ -180,10 +189,10 @@ impl Body {
     pub(crate) fn h2(
         recv: h2::RecvStream,
         content_length: DecodedLength,
-        bdp: bdp::Sampler,
+        ping: ping::Recorder,
     ) -> Self {
         let body = Body::new(Kind::H2 {
-            bdp,
+            ping,
             content_length,
             recv,
         });
@@ -265,14 +274,14 @@ impl Body {
                 }
             }
             Kind::H2 {
-                ref bdp,
+                ref ping,
                 recv: ref mut h2,
                 content_length: ref mut len,
             } => match ready!(h2.poll_data(cx)) {
                 Some(Ok(bytes)) => {
                     let _ = h2.flow_control().release_capacity(bytes.len());
                     len.sub_if(bytes.len() as u64);
-                    bdp.sample(bytes.len());
+                    ping.record_data(bytes.len());
                     Poll::Ready(Some(Ok(bytes)))
                 }
                 Some(Err(e)) => Poll::Ready(Some(Err(crate::Error::new_body(e)))),
@@ -280,7 +289,7 @@ impl Body {
             },
 
             #[cfg(feature = "stream")]
-            Kind::Wrapped(ref mut s) => match ready!(s.as_mut().poll_next(cx)) {
+            Kind::Wrapped(ref mut s) => match ready!(s.get_mut().as_mut().poll_next(cx)) {
                 Some(res) => Poll::Ready(Some(res.map_err(crate::Error::new_body))),
                 None => Poll::Ready(None),
             },
@@ -297,7 +306,7 @@ impl Body {
 }
 
 impl Default for Body {
-    /// Returns [`Body::empty()`](Body::empty).
+    /// Returns `Body::empty()`.
     #[inline]
     fn default() -> Body {
         Body::empty()
@@ -321,9 +330,14 @@ impl HttpBody for Body {
     ) -> Poll<Result<Option<HeaderMap>, Self::Error>> {
         match self.kind {
             Kind::H2 {
-                recv: ref mut h2, ..
+                recv: ref mut h2,
+                ref ping,
+                ..
             } => match ready!(h2.poll_trailers(cx)) {
-                Ok(t) => Poll::Ready(Ok(t)),
+                Ok(t) => {
+                    ping.record_non_data();
+                    Poll::Ready(Ok(t))
+                }
                 Err(e) => Poll::Ready(Err(crate::Error::new_h2(e))),
             },
             _ => Poll::Ready(Ok(None)),
@@ -397,16 +411,12 @@ impl Stream for Body {
 /// This function requires enabling the `stream` feature in your
 /// `Cargo.toml`.
 #[cfg(feature = "stream")]
-impl From<Box<dyn Stream<Item = Result<Bytes, Box<dyn StdError + Send + Sync>>> + Send + Sync>>
-    for Body
-{
+impl From<Box<dyn Stream<Item = Result<Bytes, Box<dyn StdError + Send + Sync>>> + Send>> for Body {
     #[inline]
     fn from(
-        stream: Box<
-            dyn Stream<Item = Result<Bytes, Box<dyn StdError + Send + Sync>>> + Send + Sync,
-        >,
+        stream: Box<dyn Stream<Item = Result<Bytes, Box<dyn StdError + Send + Sync>>> + Send>,
     ) -> Body {
-        Body::new(Kind::Wrapped(stream.into()))
+        Body::new(Kind::Wrapped(SyncWrapper::new(stream.into())))
     }
 }
 
@@ -560,17 +570,17 @@ mod tests {
     fn test_size_of() {
         // These are mostly to help catch *accidentally* increasing
         // the size by too much.
-        assert_eq!(
-            mem::size_of::<Body>(),
-            mem::size_of::<usize>() * 5 + mem::size_of::<u64>(),
-            "Body"
+
+        let body_size = mem::size_of::<Body>();
+        let body_expected_size = mem::size_of::<u64>() * 6;
+        assert!(
+            body_size <= body_expected_size,
+            "Body size = {} <= {}",
+            body_size,
+            body_expected_size,
         );
 
-        assert_eq!(
-            mem::size_of::<Body>(),
-            mem::size_of::<Option<Body>>(),
-            "Option<Body>"
-        );
+        assert_eq!(body_size, mem::size_of::<Option<Body>>(), "Option<Body>");
 
         assert_eq!(
             mem::size_of::<Sender>(),

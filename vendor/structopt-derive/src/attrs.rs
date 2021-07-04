@@ -65,6 +65,10 @@ pub enum CasingStyle {
     Snake,
     /// Use the original attribute name defined in the code.
     Verbatim,
+    /// Keep all letters lowercase and remove word boundaries.
+    Lower,
+    /// Keep all letters uppercase and remove word boundaries.
+    Upper,
 }
 
 #[derive(Clone)]
@@ -96,7 +100,7 @@ impl Method {
         Method { name, args }
     }
 
-    fn from_lit_or_env(ident: Ident, lit: Option<LitStr>, env_var: &str) -> Option<Self> {
+    fn from_lit_or_env(ident: Ident, lit: Option<LitStr>, env_var: &str) -> Self {
         let mut lit = match lit {
             Some(lit) => lit,
 
@@ -117,7 +121,7 @@ impl Method {
             lit = LitStr::new(&edited, lit.span());
         }
 
-        Some(Method::new(ident, quote!(#lit)))
+        Method::new(ident, quote!(#lit))
     }
 }
 
@@ -188,6 +192,8 @@ impl CasingStyle {
             "screamingsnake" | "screamingsnakecase" => cs(ScreamingSnake),
             "snake" | "snakecase" => cs(Snake),
             "verbatim" | "verbatimcase" => cs(Verbatim),
+            "lower" | "lowercase" => cs(Lower),
+            "upper" | "uppercase" => cs(Upper),
             s => abort!(name, "unsupported casing: `{}`", s),
         }
     }
@@ -208,6 +214,8 @@ impl Name {
                     ScreamingSnake => s.to_shouty_snake_case(),
                     Snake => s.to_snake_case(),
                     Verbatim => s,
+                    Lower => s.to_snake_case().replace("_", ""),
+                    Upper => s.to_shouty_snake_case().replace("_", ""),
                 };
                 quote_spanned!(ident.span()=> #s)
             }
@@ -327,11 +335,15 @@ impl Attrs {
                 }
 
                 About(ident, about) => {
-                    self.about = Method::from_lit_or_env(ident, about, "CARGO_PKG_DESCRIPTION");
+                    self.about = Some(Method::from_lit_or_env(
+                        ident,
+                        about,
+                        "CARGO_PKG_DESCRIPTION",
+                    ));
                 }
 
                 Author(ident, author) => {
-                    self.author = Method::from_lit_or_env(ident, author, "CARGO_PKG_AUTHORS");
+                    self.author = Some(Method::from_lit_or_env(ident, author, "CARGO_PKG_AUTHORS"));
                 }
 
                 Version(ident, version) => {
@@ -437,11 +449,15 @@ impl Attrs {
                         "parse attribute is not allowed for flattened entry"
                     );
                 }
-                if res.has_explicit_methods() || res.has_doc_methods() {
+                if res.has_explicit_methods() {
                     abort!(
                         res.kind.span(),
-                        "methods and doc comments are not allowed for flattened entry"
+                        "methods are not allowed for flattened entry"
                     );
+                }
+
+                if res.has_doc_methods() {
+                    res.doc_comment = vec![];
                 }
             }
 

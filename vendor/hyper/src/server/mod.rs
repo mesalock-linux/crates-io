@@ -69,7 +69,7 @@ use pin_project::pin_project;
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use self::accept::Accept;
-use crate::body::{Body, Payload};
+use crate::body::{Body, HttpBody};
 use crate::common::exec::{Exec, H2Exec, NewSvcExec};
 use crate::common::{task, Future, Pin, Poll, Unpin};
 use crate::service::{HttpService, MakeServiceRef};
@@ -152,7 +152,8 @@ where
     IO: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     S: MakeServiceRef<IO, Body, ResBody = B>,
     S::Error: Into<Box<dyn StdError + Send + Sync>>,
-    B: Payload,
+    B: HttpBody + Send + Sync + 'static,
+    B::Error: Into<Box<dyn StdError + Send + Sync>>,
     E: H2Exec<<S::Service as HttpService<Body>>::Future, B>,
     E: NewSvcExec<IO, S::Future, S::Service, E, GracefulWatcher>,
 {
@@ -207,7 +208,8 @@ where
     IO: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     S: MakeServiceRef<IO, Body, ResBody = B>,
     S::Error: Into<Box<dyn StdError + Send + Sync>>,
-    B: Payload,
+    B: HttpBody + 'static,
+    B::Error: Into<Box<dyn StdError + Send + Sync>>,
     E: H2Exec<<S::Service as HttpService<Body>>::Future, B>,
     E: NewSvcExec<IO, S::Future, S::Service, E, NoopWatcher>,
 {
@@ -240,7 +242,7 @@ impl<I, E> Builder<I, E> {
     ///
     /// Default is `true`.
     pub fn http1_keepalive(mut self, val: bool) -> Self {
-        self.protocol.keep_alive(val);
+        self.protocol.http1_keep_alive(val);
         self
     }
 
@@ -257,11 +259,11 @@ impl<I, E> Builder<I, E> {
         self
     }
 
-    /// Sets whether HTTP/1 is required.
+    /// Set the maximum buffer size.
     ///
-    /// Default is `false`.
-    pub fn http1_only(mut self, val: bool) -> Self {
-        self.protocol.http1_only(val);
+    /// Default is ~ 400kb.
+    pub fn http1_max_buf_size(mut self, val: usize) -> Self {
+        self.protocol.max_buf_size(val);
         self
     }
 
@@ -284,9 +286,21 @@ impl<I, E> Builder<I, E> {
     /// but may also improve performance when an IO transport doesn't
     /// support vectored writes well, such as most TLS implementations.
     ///
-    /// Default is `true`.
+    /// Setting this to true will force hyper to use queued strategy
+    /// which may eliminate unnecessary cloning on some TLS backends
+    ///
+    /// Default is `auto`. In this mode hyper will try to guess which
+    /// mode to use
     pub fn http1_writev(mut self, val: bool) -> Self {
         self.protocol.http1_writev(val);
+        self
+    }
+
+    /// Sets whether HTTP/1 is required.
+    ///
+    /// Default is `false`.
+    pub fn http1_only(mut self, val: bool) -> Self {
+        self.protocol.http1_only(val);
         self
     }
 
@@ -332,6 +346,16 @@ impl<I, E> Builder<I, E> {
         self
     }
 
+    /// Sets the maximum frame size to use for HTTP2.
+    ///
+    /// Passing `None` will do nothing.
+    ///
+    /// If not set, hyper will use a default.
+    pub fn http2_max_frame_size(mut self, sz: impl Into<Option<u32>>) -> Self {
+        self.protocol.http2_max_frame_size(sz);
+        self
+    }
+
     /// Sets the [`SETTINGS_MAX_CONCURRENT_STREAMS`][spec] option for HTTP2
     /// connections.
     ///
@@ -343,11 +367,35 @@ impl<I, E> Builder<I, E> {
         self
     }
 
-    /// Set the maximum buffer size.
+    /// Sets an interval for HTTP2 Ping frames should be sent to keep a
+    /// connection alive.
     ///
-    /// Default is ~ 400kb.
-    pub fn http1_max_buf_size(mut self, val: usize) -> Self {
-        self.protocol.max_buf_size(val);
+    /// Pass `None` to disable HTTP2 keep-alive.
+    ///
+    /// Default is currently disabled.
+    ///
+    /// # Cargo Feature
+    ///
+    /// Requires the `runtime` cargo feature to be enabled.
+    #[cfg(feature = "runtime")]
+    pub fn http2_keep_alive_interval(mut self, interval: impl Into<Option<Duration>>) -> Self {
+        self.protocol.http2_keep_alive_interval(interval);
+        self
+    }
+
+    /// Sets a timeout for receiving an acknowledgement of the keep-alive ping.
+    ///
+    /// If the ping is not acknowledged within the timeout, the connection will
+    /// be closed. Does nothing if `http2_keep_alive_interval` is disabled.
+    ///
+    /// Default is 20 seconds.
+    ///
+    /// # Cargo Feature
+    ///
+    /// Requires the `runtime` cargo feature to be enabled.
+    #[cfg(feature = "runtime")]
+    pub fn http2_keep_alive_timeout(mut self, timeout: Duration) -> Self {
+        self.protocol.http2_keep_alive_timeout(timeout);
         self
     }
 
@@ -398,7 +446,8 @@ impl<I, E> Builder<I, E> {
         I::Conn: AsyncRead + AsyncWrite + Unpin + Send + 'static,
         S: MakeServiceRef<I::Conn, Body, ResBody = B>,
         S::Error: Into<Box<dyn StdError + Send + Sync>>,
-        B: Payload,
+        B: HttpBody + 'static,
+        B::Error: Into<Box<dyn StdError + Send + Sync>>,
         E: NewSvcExec<I::Conn, S::Future, S::Service, E, NoopWatcher>,
         E: H2Exec<<S::Service as HttpService<Body>>::Future, B>,
     {

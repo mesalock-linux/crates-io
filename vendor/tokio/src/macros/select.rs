@@ -4,7 +4,7 @@
 /// The `select!` macro must be used inside of async functions, closures, and
 /// blocks.
 ///
-/// The `select` macro accepts one or more branches with the following pattern:
+/// The `select!` macro accepts one or more branches with the following pattern:
 ///
 /// ```text
 /// <pattern> = <async expression> (, if <precondition>)? => <handler>,
@@ -24,13 +24,13 @@
 /// expression.
 ///
 /// Additionally, each branch may include an optional `if` precondition. This
-/// precondition is evaluated **before** the <async expression>. If the
+/// precondition is evaluated **before** the `<async expression>`. If the
 /// precondition returns `false`, the branch is entirely disabled. This
 /// capability is useful when using `select!` within a loop.
 ///
 /// The complete lifecycle of a `select!` expression is as follows:
 ///
-/// 1. Evaluate all provded `<precondition>` expressions. If the precondition
+/// 1. Evaluate all provided `<precondition>` expressions. If the precondition
 ///    returns `false`, disable the branch for the remainder of the current call
 ///    to `select!`. Re-entering `select!` due to a loop clears the "disabled"
 ///    state.
@@ -41,7 +41,7 @@
 /// 4. Once an `<async expression>` returns a value, attempt to apply the value
 ///    to the provided `<pattern>`, if the pattern matches, evaluate `<handler>`
 ///    and return. If the pattern **does not** match, disable the current branch
-///    and for the remainder of the current call to `select!. Continue from step 3.
+///    and for the remainder of the current call to `select!`. Continue from step 3.
 /// 5. If **all** branches are disabled, evaluate the `else` expression. If none
 ///    is provided, panic.
 ///
@@ -210,7 +210,7 @@
 /// }
 /// ```
 ///
-/// Using the same future in multiple select! expressions can be done by passing
+/// Using the same future in multiple `select!` expressions can be done by passing
 /// a reference to the future. Doing so requires the future to be [`Unpin`]. A
 /// future can be made [`Unpin`] by either using [`Box::pin`] or stack pinning.
 ///
@@ -359,10 +359,14 @@ macro_rules! select {
                 let start = $crate::macros::support::thread_rng_n(BRANCHES);
 
                 for i in 0..BRANCHES {
-                    let branch = (start + i) % BRANCHES;
-
+                    let branch;
+                    #[allow(clippy::modulo_one)]
+                    {
+                        branch = (start + i) % BRANCHES;
+                    }
                     match branch {
                         $(
+                            #[allow(unreachable_code)]
                             $crate::count!( $($skip)* ) => {
                                 // First, if the future has previously been
                                 // disabled, do not poll it again. This is done

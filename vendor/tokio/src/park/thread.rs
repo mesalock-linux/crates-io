@@ -65,6 +65,10 @@ impl Park for ParkThread {
         self.inner.park_timeout(duration);
         Ok(())
     }
+
+    fn shutdown(&mut self) {
+        self.inner.shutdown();
+    }
 }
 
 // ==== impl Inner ====
@@ -129,6 +133,10 @@ impl Inner {
             return;
         }
 
+        if dur == Duration::from_millis(0) {
+            return;
+        }
+
         let m = self.mutex.lock().unwrap();
 
         match self.state.compare_exchange(EMPTY, PARKED, SeqCst, SeqCst) {
@@ -184,6 +192,10 @@ impl Inner {
 
         self.condvar.notify_one()
     }
+
+    fn shutdown(&self) {
+        self.condvar.notify_all();
+    }
 }
 
 impl Default for ParkThread {
@@ -200,7 +212,7 @@ impl Unpark for UnparkThread {
     }
 }
 
-cfg_blocking_impl! {
+cfg_block_on! {
     use std::marker::PhantomData;
     use std::rc::Rc;
 
@@ -254,6 +266,10 @@ cfg_blocking_impl! {
         fn park_timeout(&mut self, duration: Duration) -> Result<(), Self::Error> {
             self.with_current(|park_thread| park_thread.inner.park_timeout(duration))?;
             Ok(())
+        }
+
+        fn shutdown(&mut self) {
+            let _ = self.with_current(|park_thread| park_thread.inner.shutdown());
         }
     }
 

@@ -1,21 +1,28 @@
-#![deny(safe_packed_borrows)]
+#![deny(renamed_and_removed_lints)]
+#![deny(safe_packed_borrows)] //~ ERROR has been renamed to `unaligned_references`
+#![allow(unaligned_references)]
 
-// Refs: https://github.com/rust-lang/rust/issues/46043
+// This lint was removed in https://github.com/rust-lang/rust/pull/82525 (nightly-2021-03-28).
+// Refs:
+// - https://github.com/rust-lang/rust/pull/82525
+// - https://github.com/rust-lang/rust/issues/46043
 
 #[repr(packed)]
-struct A {
-    field: u32,
+struct Packed {
+    f: u32,
 }
 
 #[repr(packed(2))]
-struct B {
-    field: u32,
+struct PackedN {
+    f: u32,
 }
 
 fn main() {
-    let a = A { field: 1 };
-    &a.field; //~ ERROR borrow of packed field is unsafe and requires unsafe function or block
+    let a = Packed { f: 1 };
+    &a.f;
+    let _ = &a.f;
 
-    let b = B { field: 1 };
-    &b.field; //~ ERROR borrow of packed field is unsafe and requires unsafe function or block
+    let b = PackedN { f: 1 };
+    &b.f;
+    let _ = &b.f;
 }

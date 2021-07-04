@@ -341,9 +341,47 @@ cfg_if! {
         }
     }
 }
-pub enum X509_CRL {}
+
+pub enum X509_LOOKUP_METHOD {}
+
 pub enum X509_NAME {}
-pub enum X509_STORE {}
+
+cfg_if! {
+    if #[cfg(any(ossl110, libressl270))] {
+        pub enum X509_STORE {}
+    } else {
+        #[repr(C)]
+        pub struct X509_STORE {
+            cache: c_int,
+            pub objs: *mut stack_st_X509_OBJECT,
+            get_cert_methods: *mut stack_st_X509_LOOKUP,
+            param: *mut X509_VERIFY_PARAM,
+            verify: Option<extern "C" fn(ctx: *mut X509_STORE_CTX) -> c_int>,
+            verify_cb: Option<extern "C" fn(ok: c_int, ctx: *mut X509_STORE_CTX) -> c_int>,
+            get_issuer: Option<
+                extern "C" fn(issuer: *mut *mut X509, ctx: *mut X509_STORE_CTX, x: *mut X509) -> c_int,
+            >,
+            check_issued:
+                Option<extern "C" fn(ctx: *mut X509_STORE_CTX, x: *mut X509, issuer: *mut X509) -> c_int>,
+            check_revocation: Option<extern "C" fn(ctx: *mut X509_STORE_CTX) -> c_int>,
+            get_crl: Option<
+                extern "C" fn(ctx: *mut X509_STORE_CTX, crl: *mut *mut X509_CRL, x: *mut X509) -> c_int,
+            >,
+            check_crl: Option<extern "C" fn(ctx: *mut X509_STORE_CTX, crl: *mut X509_CRL) -> c_int>,
+            cert_crl:
+                Option<extern "C" fn(ctx: *mut X509_STORE_CTX, crl: *mut X509_CRL, x: *mut X509) -> c_int>,
+            lookup_certs:
+                Option<extern "C" fn(ctx: *mut X509_STORE_CTX, nm: *const X509_NAME) -> *mut stack_st_X509>,
+            lookup_crls: Option<
+                extern "C" fn(ctx: *const X509_STORE_CTX, nm: *const X509_NAME) -> *mut stack_st_X509_CRL,
+            >,
+            cleanup: Option<extern "C" fn(ctx: *mut X509_STORE_CTX) -> c_int>,
+            ex_data: CRYPTO_EX_DATA,
+            references: c_int,
+        }
+    }
+}
+
 pub enum X509_STORE_CTX {}
 
 cfg_if! {
@@ -375,7 +413,7 @@ cfg_if! {
             pub policies: *mut stack_st_ASN1_OBJECT,
             //pub id: *mut X509_VERIFY_PARAM_ID,
         }
-    } else if #[cfg(ossl102)] {
+    } else {
         #[repr(C)]
         pub struct X509_VERIFY_PARAM {
             pub name: *mut c_char,
@@ -386,6 +424,7 @@ cfg_if! {
             pub trust: c_int,
             pub depth: c_int,
             pub policies: *mut stack_st_ASN1_OBJECT,
+            #[cfg(ossl102)]
             pub id: *mut X509_VERIFY_PARAM_ID,
         }
     }
@@ -400,6 +439,8 @@ pub struct X509V3_CTX {
     crl: *mut c_void,
     db_meth: *mut c_void,
     db: *mut c_void,
+    #[cfg(ossl300)]
+    issuer_pkey: *mut c_void,
     // I like the last comment line, it is copied from OpenSSL sources:
     // Maybe more here
 }
@@ -971,7 +1012,41 @@ cfg_if! {
     }
 }
 
-pub enum COMP_METHOD {}
+pub enum COMP_CTX {}
+
+cfg_if! {
+    if #[cfg(ossl110)] {
+        pub enum COMP_METHOD {}
+    } else {
+        #[repr(C)]
+        pub struct COMP_METHOD {
+            pub type_: c_int,
+            pub name: *const c_char,
+            init: Option<unsafe extern "C" fn(*mut COMP_CTX) -> c_int>,
+            finish: Option<unsafe extern "C" fn(*mut COMP_CTX)>,
+            compress: Option<
+                unsafe extern "C" fn(
+                    *mut COMP_CTX,
+                    *mut c_uchar,
+                    c_uint,
+                    *mut c_uchar,
+                    c_uint,
+                ) -> c_int,
+            >,
+            expand: Option<
+                unsafe extern "C" fn(
+                    *mut COMP_CTX,
+                    *mut c_uchar,
+                    c_uint,
+                    *mut c_uchar,
+                    c_uint,
+                ) -> c_int,
+            >,
+            ctrl: Option<unsafe extern "C" fn() -> c_long>,
+            callback_ctrl: Option<unsafe extern "C" fn() -> c_long>,
+        }
+    }
+}
 
 cfg_if! {
     if #[cfg(any(ossl110, libressl280))] {

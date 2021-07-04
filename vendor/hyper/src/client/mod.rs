@@ -48,6 +48,7 @@
 //! # fn main () {}
 //! ```
 
+use std::error::Error as StdError;
 use std::fmt;
 use std::mem;
 use std::time::Duration;
@@ -60,7 +61,7 @@ use http::{Method, Request, Response, Uri, Version};
 
 use self::connect::{sealed::Connect, Alpn, Connected, Connection};
 use self::pool::{Key as PoolKey, Pool, Poolable, Pooled, Reservation};
-use crate::body::{Body, Payload};
+use crate::body::{Body, HttpBody};
 use crate::common::{lazy as hyper_lazy, task, BoxSendFuture, Executor, Future, Lazy, Pin, Poll};
 
 #[cfg(feature = "tcp")]
@@ -72,6 +73,7 @@ pub(crate) mod dispatch;
 mod pool;
 pub mod service;
 #[cfg(test)]
+#[cfg(feature = "runtime")]
 mod tests;
 
 /// A Client to make outgoing HTTP requests.
@@ -150,16 +152,17 @@ impl Client<(), Body> {
 impl<C, B> Client<C, B>
 where
     C: Connect + Clone + Send + Sync + 'static,
-    B: Payload + Send + 'static,
+    B: HttpBody + Send + 'static,
     B::Data: Send,
+    B::Error: Into<Box<dyn StdError + Send + Sync>>,
 {
     /// Send a `GET` request to the supplied `Uri`.
     ///
     /// # Note
     ///
-    /// This requires that the `Payload` type have a `Default` implementation.
+    /// This requires that the `HttpBody` type have a `Default` implementation.
     /// It *should* return an "empty" version of itself, such that
-    /// `Payload::is_end_stream` is `true`.
+    /// `HttpBody::is_end_stream` is `true`.
     ///
     /// # Example
     ///
@@ -180,7 +183,7 @@ where
     {
         let body = B::default();
         if !body.is_end_stream() {
-            warn!("default Payload used for get() does not return true for is_end_stream");
+            warn!("default HttpBody used for get() does not return true for is_end_stream");
         }
 
         let mut req = Request::new(body);
@@ -323,7 +326,7 @@ where
             let extra_info = pooled.conn_info.extra.clone();
             let fut = fut.map_ok(move |mut res| {
                 if let Some(extra) = extra_info {
-                    extra.set(&mut res);
+                    extra.set(res.extensions_mut());
                 }
                 res
             });
@@ -543,8 +546,29 @@ where
 impl<C, B> tower_service::Service<Request<B>> for Client<C, B>
 where
     C: Connect + Clone + Send + Sync + 'static,
-    B: Payload + Send + 'static,
+    B: HttpBody + Send + 'static,
     B::Data: Send,
+    B::Error: Into<Box<dyn StdError + Send + Sync>>,
+{
+    type Response = Response<Body>;
+    type Error = crate::Error;
+    type Future = ResponseFuture;
+
+    fn poll_ready(&mut self, _: &mut task::Context<'_>) -> Poll<Result<(), Self::Error>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn call(&mut self, req: Request<B>) -> Self::Future {
+        self.request(req)
+    }
+}
+
+impl<C, B> tower_service::Service<Request<B>> for &'_ Client<C, B>
+where
+    C: Connect + Clone + Send + Sync + 'static,
+    B: HttpBody + Send + 'static,
+    B::Data: Send,
+    B::Error: Into<Box<dyn StdError + Send + Sync>>,
 {
     type Response = Response<Body>;
     type Error = crate::Error;
@@ -653,7 +677,7 @@ impl<B> PoolClient<B> {
     }
 }
 
-impl<B: Payload + 'static> PoolClient<B> {
+impl<B: HttpBody + 'static> PoolClient<B> {
     fn send_request_retryable(
         &mut self,
         req: Request<B>,
@@ -770,13 +794,11 @@ fn absolute_form(uri: &mut Uri) {
 }
 
 fn authority_form(uri: &mut Uri) {
-    if log_enabled!(::log::Level::Warn) {
-        if let Some(path) = uri.path_and_query() {
-            // `https://hyper.rs` would parse with `/` path, don't
-            // annoy people about that...
-            if path != "/" {
-                warn!("HTTP/1.1 CONNECT request stripping path: {:?}", path);
-            }
+    if let Some(path) = uri.path_and_query() {
+        // `https://hyper.rs` would parse with `/` path, don't
+        // annoy people about that...
+        if path != "/" {
+            warn!("HTTP/1.1 CONNECT request stripping path: {:?}", path);
         }
     }
     *uri = match uri.authority() {
@@ -933,6 +955,7 @@ impl Builder {
         self.pool_config.max_idle_per_host = max_idle;
         self
     }
+
     // HTTP/1 options
 
     /// Set whether HTTP/1 connections should try to use vectored writes,
@@ -942,7 +965,11 @@ impl Builder {
     /// but may also improve performance when an IO transport doesn't
     /// support vectored writes well, such as most TLS implementations.
     ///
-    /// Default is `true`.
+    /// Setting this to true will force hyper to use queued strategy
+    /// which may eliminate unnecessary cloning on some TLS backends
+    ///
+    /// Default is `auto`. In this mode hyper will try to guess which
+    /// mode to use
     pub fn http1_writev(&mut self, val: bool) -> &mut Self {
         self.conn_builder.h1_writev(val);
         self
@@ -1036,6 +1063,69 @@ impl Builder {
         self
     }
 
+    /// Sets the maximum frame size to use for HTTP2.
+    ///
+    /// Passing `None` will do nothing.
+    ///
+    /// If not set, hyper will use a default.
+    pub fn http2_max_frame_size(&mut self, sz: impl Into<Option<u32>>) -> &mut Self {
+        self.conn_builder.http2_max_frame_size(sz);
+        self
+    }
+
+    /// Sets an interval for HTTP2 Ping frames should be sent to keep a
+    /// connection alive.
+    ///
+    /// Pass `None` to disable HTTP2 keep-alive.
+    ///
+    /// Default is currently disabled.
+    ///
+    /// # Cargo Feature
+    ///
+    /// Requires the `runtime` cargo feature to be enabled.
+    #[cfg(feature = "runtime")]
+    pub fn http2_keep_alive_interval(
+        &mut self,
+        interval: impl Into<Option<Duration>>,
+    ) -> &mut Self {
+        self.conn_builder.http2_keep_alive_interval(interval);
+        self
+    }
+
+    /// Sets a timeout for receiving an acknowledgement of the keep-alive ping.
+    ///
+    /// If the ping is not acknowledged within the timeout, the connection will
+    /// be closed. Does nothing if `http2_keep_alive_interval` is disabled.
+    ///
+    /// Default is 20 seconds.
+    ///
+    /// # Cargo Feature
+    ///
+    /// Requires the `runtime` cargo feature to be enabled.
+    #[cfg(feature = "runtime")]
+    pub fn http2_keep_alive_timeout(&mut self, timeout: Duration) -> &mut Self {
+        self.conn_builder.http2_keep_alive_timeout(timeout);
+        self
+    }
+
+    /// Sets whether HTTP2 keep-alive should apply while the connection is idle.
+    ///
+    /// If disabled, keep-alive pings are only sent while there are open
+    /// request/responses streams. If enabled, pings are also sent when no
+    /// streams are active. Does nothing if `http2_keep_alive_interval` is
+    /// disabled.
+    ///
+    /// Default is `false`.
+    ///
+    /// # Cargo Feature
+    ///
+    /// Requires the `runtime` cargo feature to be enabled.
+    #[cfg(feature = "runtime")]
+    pub fn http2_keep_alive_while_idle(&mut self, enabled: bool) -> &mut Self {
+        self.conn_builder.http2_keep_alive_while_idle(enabled);
+        self
+    }
+
     /// Set whether to retry requests that get disrupted before ever starting
     /// to write.
     ///
@@ -1078,7 +1168,7 @@ impl Builder {
     #[cfg(feature = "tcp")]
     pub fn build_http<B>(&self) -> Client<HttpConnector, B>
     where
-        B: Payload + Send,
+        B: HttpBody + Send,
         B::Data: Send,
     {
         let mut connector = HttpConnector::new();
@@ -1092,7 +1182,7 @@ impl Builder {
     pub fn build<C, B>(&self, connector: C) -> Client<C, B>
     where
         C: Connect + Clone,
-        B: Payload + Send,
+        B: HttpBody + Send,
         B::Data: Send,
     {
         Client {

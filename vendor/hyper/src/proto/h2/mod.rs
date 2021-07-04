@@ -6,14 +6,16 @@ use http::header::{
 };
 use http::HeaderMap;
 use pin_project::pin_project;
+use std::error::Error as StdError;
+use std::io::IoSlice;
 
 use super::DecodedLength;
-use crate::body::Payload;
+use crate::body::HttpBody;
 use crate::common::{task, Future, Pin, Poll};
 use crate::headers::content_length_parse_all;
 
-pub(crate) mod bdp;
 pub(crate) mod client;
+pub(crate) mod ping;
 pub(crate) mod server;
 
 pub(crate) use self::client::ClientTask;
@@ -91,7 +93,7 @@ fn decode_content_length(headers: &HeaderMap) -> DecodedLength {
 #[pin_project]
 struct PipeToSendStream<S>
 where
-    S: Payload,
+    S: HttpBody,
 {
     body_tx: SendStream<SendBuf<S::Data>>,
     data_done: bool,
@@ -101,7 +103,7 @@ where
 
 impl<S> PipeToSendStream<S>
 where
-    S: Payload,
+    S: HttpBody,
 {
     fn new(stream: S, tx: SendStream<SendBuf<S::Data>>) -> PipeToSendStream<S> {
         PipeToSendStream {
@@ -114,7 +116,8 @@ where
 
 impl<S> Future for PipeToSendStream<S>
 where
-    S: Payload,
+    S: HttpBody,
+    S::Error: Into<Box<dyn StdError + Send + Sync>>,
 {
     type Output = crate::Result<()>;
 
@@ -259,5 +262,9 @@ impl<B: Buf> Buf for SendBuf<B> {
         if let Some(b) = self.0.as_mut() {
             b.advance(cnt)
         }
+    }
+
+    fn bytes_vectored<'a>(&'a self, dst: &mut [IoSlice<'a>]) -> usize {
+        self.0.as_ref().map(|b| b.bytes_vectored(dst)).unwrap_or(0)
     }
 }

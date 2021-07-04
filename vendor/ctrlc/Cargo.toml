@@ -11,13 +11,15 @@
 # will likely look very different (and much more reasonable)
 
 [package]
+edition = "2018"
 name = "ctrlc"
-version = "3.1.4"
+version = "3.1.9"
 authors = ["Antti Keränen <detegr@gmail.com>"]
 exclude = ["/.travis.yml", "/appveyor.yml"]
 description = "Easy Ctrl-C handler for Rust projects"
 homepage = "https://github.com/Detegr/rust-ctrlc"
 documentation = "http://detegr.github.io/doc/ctrlc"
+readme = "README.md"
 keywords = ["ctrlc", "signal", "SIGINT"]
 categories = ["os"]
 license = "MIT/Apache-2.0"
@@ -31,7 +33,7 @@ harness = false
 [features]
 termination = []
 [target."cfg(unix)".dependencies.nix]
-version = "0.17"
+version = "0.20"
 [target."cfg(windows)".dependencies.winapi]
 version = "0.3"
 features = ["consoleapi", "handleapi", "synchapi", "winbase"]

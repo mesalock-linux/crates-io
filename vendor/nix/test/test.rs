@@ -1,106 +1,13 @@
-extern crate bytes;
-#[cfg(any(target_os = "android", target_os = "linux"))]
-extern crate caps;
 #[macro_use]
 extern crate cfg_if;
-#[macro_use]
+#[cfg_attr(not(target_os = "redox"), macro_use)]
 extern crate nix;
 #[macro_use]
 extern crate lazy_static;
-extern crate libc;
-extern crate rand;
-#[cfg(target_os = "freebsd")]
-extern crate sysctl;
-extern crate tempfile;
 
-cfg_if! {
-    if #[cfg(any(target_os = "android", target_os = "linux"))] {
-        macro_rules! require_capability {
-            ($capname:ident) => {
-                use ::caps::{Capability, CapSet, has_cap};
-                use ::std::io::{self, Write};
-
-                if !has_cap(None, CapSet::Effective, Capability::$capname)
-                    .unwrap()
-                {
-                    let stderr = io::stderr();
-                    let mut handle = stderr.lock();
-                    writeln!(handle,
-                        "Insufficient capabilities. Skipping test.")
-                        .unwrap();
-                    return;
-                }
-            }
-        }
-    } else {
-        macro_rules! require_capability {
-            ($capname:ident) => {}
-        }
-    }
-}
-
-#[cfg(target_os = "freebsd")]
-macro_rules! skip_if_jailed {
-    ($name:expr) => {
-        use ::sysctl::CtlValue;
-
-        if let CtlValue::Int(1) = ::sysctl::value("security.jail.jailed")
-            .unwrap()
-        {
-            use ::std::io::Write;
-            let stderr = ::std::io::stderr();
-            let mut handle = stderr.lock();
-            writeln!(handle, "{} cannot run in a jail. Skipping test.", $name)
-                .unwrap();
-            return;
-        }
-    }
-}
-
-macro_rules! skip_if_not_root {
-    ($name:expr) => {
-        use nix::unistd::Uid;
-
-        if !Uid::current().is_root() {
-            use ::std::io::Write;
-            let stderr = ::std::io::stderr();
-            let mut handle = stderr.lock();
-            writeln!(handle, "{} requires root privileges. Skipping test.", $name).unwrap();
-            return;
-        }
-    };
-}
-
-cfg_if! {
-    if #[cfg(any(target_os = "android", target_os = "linux"))] {
-        macro_rules! skip_if_seccomp {
-            ($name:expr) => {
-                if let Ok(s) = std::fs::read_to_string("/proc/self/status") {
-                    for l in s.lines() {
-                        let mut fields = l.split_whitespace();
-                        if fields.next() == Some("Seccomp:") &&
-                            fields.next() != Some("0")
-                        {
-                            use ::std::io::Write;
-                            let stderr = ::std::io::stderr();
-                            let mut handle = stderr.lock();
-                            writeln!(handle,
-                                "{} cannot be run in Seccomp mode.  Skipping test.",
-                                stringify!($name)).unwrap();
-                            return;
-                        }
-                    }
-                }
-            }
-        }
-    } else {
-        macro_rules! skip_if_seccomp {
-            ($name:expr) => {}
-        }
-    }
-}
-
+mod common;
 mod sys;
+#[cfg(not(target_os = "redox"))]
 mod test_dir;
 mod test_fcntl;
 #[cfg(any(target_os = "android",
@@ -112,9 +19,11 @@ mod test_kmod;
           target_os = "linux",
           target_os = "netbsd"))]
 mod test_mq;
+#[cfg(not(target_os = "redox"))]
 mod test_net;
 mod test_nix_path;
 mod test_poll;
+#[cfg(not(any(target_os = "redox", target_os = "fuchsia")))]
 mod test_pty;
 #[cfg(any(target_os = "android",
           target_os = "linux"))]
@@ -126,12 +35,14 @@ mod test_sched;
           target_os = "macos"))]
 mod test_sendfile;
 mod test_stat;
+mod test_time;
 mod test_unistd;
 
 use std::os::unix::io::RawFd;
 use std::path::PathBuf;
 use std::sync::{Mutex, RwLock, RwLockWriteGuard};
 use nix::unistd::{chdir, getcwd, read};
+
 
 /// Helper function analogous to `std::io::Read::read_exact`, but for `RawFD`s
 fn read_exact(f: RawFd, buf: &mut  [u8]) {
@@ -170,7 +81,7 @@ struct DirRestore<'a> {
 
 impl<'a> DirRestore<'a> {
     fn new() -> Self {
-        let guard = ::CWD_LOCK.write()
+        let guard = crate::CWD_LOCK.write()
             .expect("Lock got poisoned by another test");
         DirRestore{
             _g: guard,

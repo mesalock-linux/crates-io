@@ -45,11 +45,13 @@ pub struct Pkcs12ImportOptions {
 
 #[cfg(target_os = "macos")]
 impl crate::Pkcs12ImportOptionsInternals for Pkcs12ImportOptions {
+    #[inline(always)]
     fn keychain(&mut self, keychain: SecKeychain) -> &mut Self {
         self.keychain = Some(keychain);
         self
     }
 
+    #[inline(always)]
     fn access(&mut self, access: SecAccess) -> &mut Self {
         self.access = Some(access);
         self
@@ -58,6 +60,7 @@ impl crate::Pkcs12ImportOptionsInternals for Pkcs12ImportOptions {
 
 impl Pkcs12ImportOptions {
     /// Creates a new builder with default options.
+    #[inline(always)]
     pub fn new() -> Self {
         Self::default()
     }
@@ -65,26 +68,9 @@ impl Pkcs12ImportOptions {
     /// Specifies the passphrase to be used to decrypt the data.
     ///
     /// This must be specified, as unencrypted PKCS#12 data is not supported.
+    #[inline]
     pub fn passphrase(&mut self, passphrase: &str) -> &mut Self {
         self.passphrase = Some(CFString::new(passphrase));
-        self
-    }
-
-    /// Deprecated
-    ///
-    /// Replaced by `os::macos::import_export::Pkcs12ImportOptionsExt::keychain`.
-    #[cfg(target_os = "macos")]
-    pub fn keychain(&mut self, keychain: SecKeychain) -> &mut Self {
-        self.keychain = Some(keychain);
-        self
-    }
-
-    /// Deprecated
-    ///
-    /// Replaced by `os::macos::import_export::Pkcs12ImportOptionsExt::access`.
-    #[cfg(target_os = "macos")]
-    pub fn access(&mut self, access: SecAccess) -> &mut Self {
-        self.access = Some(access);
         self
     }
 

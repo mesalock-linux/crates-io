@@ -1,5 +1,6 @@
-use super::Weekday::{self, *};
-use crate::shim::*;
+use super::Weekday::{self, Friday, Monday, Saturday, Sunday, Thursday, Tuesday, Wednesday};
+#[allow(unused_imports)]
+use standback::prelude::*;
 
 fn is_leap_year(year: i32) -> bool {
     (year % 4 == 0) && ((year % 100 != 0) || (year % 400 == 0))
@@ -35,7 +36,7 @@ pub(crate) struct Date {
 }
 
 impl Date {
-    pub(crate) fn as_yo(&self) -> (i32, u16) {
+    pub(crate) const fn as_yo(&self) -> (i32, u16) {
         (self.year, self.ordinal)
     }
 
@@ -48,33 +49,30 @@ impl Date {
         let days = CUMULATIVE_DAYS_IN_MONTH_COMMON_LEAP[is_leap_year(self.year) as usize];
         let ordinal = self.ordinal;
 
-        #[allow(clippy::cast_possible_truncation)]
-        {
-            if ordinal > days[10] {
-                (12, (ordinal - days[10]) as u8)
-            } else if ordinal > days[9] {
-                (11, (ordinal - days[9]) as u8)
-            } else if ordinal > days[8] {
-                (10, (ordinal - days[8]) as u8)
-            } else if ordinal > days[7] {
-                (9, (ordinal - days[7]) as u8)
-            } else if ordinal > days[6] {
-                (8, (ordinal - days[6]) as u8)
-            } else if ordinal > days[5] {
-                (7, (ordinal - days[5]) as u8)
-            } else if ordinal > days[4] {
-                (6, (ordinal - days[4]) as u8)
-            } else if ordinal > days[3] {
-                (5, (ordinal - days[3]) as u8)
-            } else if ordinal > days[2] {
-                (4, (ordinal - days[2]) as u8)
-            } else if ordinal > days[1] {
-                (3, (ordinal - days[1]) as u8)
-            } else if ordinal > days[0] {
-                (2, (ordinal - days[0]) as u8)
-            } else {
-                (1, ordinal as u8)
-            }
+        if ordinal > days[10] {
+            (12, (ordinal - days[10]) as u8)
+        } else if ordinal > days[9] {
+            (11, (ordinal - days[9]) as u8)
+        } else if ordinal > days[8] {
+            (10, (ordinal - days[8]) as u8)
+        } else if ordinal > days[7] {
+            (9, (ordinal - days[7]) as u8)
+        } else if ordinal > days[6] {
+            (8, (ordinal - days[6]) as u8)
+        } else if ordinal > days[5] {
+            (7, (ordinal - days[5]) as u8)
+        } else if ordinal > days[4] {
+            (6, (ordinal - days[4]) as u8)
+        } else if ordinal > days[3] {
+            (5, (ordinal - days[3]) as u8)
+        } else if ordinal > days[2] {
+            (4, (ordinal - days[2]) as u8)
+        } else if ordinal > days[1] {
+            (3, (ordinal - days[1]) as u8)
+        } else if ordinal > days[0] {
+            (2, (ordinal - days[0]) as u8)
+        } else {
+            (1, ordinal as u8)
         }
     }
 
@@ -90,7 +88,7 @@ impl Date {
         match (day as i32 + (13 * (month as i32 + 1)) / 5 + adjusted_year + adjusted_year / 4
             - adjusted_year / 100
             + adjusted_year / 400)
-            .rem_euclid_shim(7)
+            .rem_euclid(7)
         {
             0 => Saturday,
             1 => Sunday,
@@ -138,7 +136,7 @@ impl Date {
         }
     }
 
-    pub(crate) fn from_yo_unchecked(year: i32, ordinal: u16) -> Date {
+    pub(crate) const fn from_yo_unchecked(year: i32, ordinal: u16) -> Date {
         Date { year, ordinal }
     }
 }

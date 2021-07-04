@@ -87,7 +87,8 @@ impl Encoder {
             Kind::Chunked => Ok(Some(EncodedBuf {
                 kind: BufKind::ChunkedEnd(b"0\r\n\r\n"),
             })),
-            _ => Err(NotEof),
+            Kind::CloseDelimited => Ok(None),
+            Kind::Length(_) => Err(NotEof),
         }
     }
 
@@ -170,7 +171,7 @@ impl Encoder {
 
     /// Encodes the full body, without verifying the remaining length matches.
     ///
-    /// This is used in conjunction with Payload::__hyper_full_data(), which
+    /// This is used in conjunction with HttpBody::__hyper_full_data(), which
     /// means we can trust that the buf has the correct size (the buf itself
     /// was checked to make the headers).
     pub(super) fn danger_full_buf<B>(self, msg: B, dst: &mut WriteBuf<EncodedBuf<B>>)
@@ -405,7 +406,7 @@ mod tests {
 
         assert_eq!(dst, b"foo bar");
         assert!(!encoder.is_eof());
-        encoder.end::<()>().unwrap_err();
+        encoder.end::<()>().unwrap();
 
         let msg2 = b"baz".as_ref();
         let buf2 = encoder.encode(msg2);
@@ -413,6 +414,6 @@ mod tests {
 
         assert_eq!(dst, b"foo barbaz");
         assert!(!encoder.is_eof());
-        encoder.end::<()>().unwrap_err();
+        encoder.end::<()>().unwrap();
     }
 }

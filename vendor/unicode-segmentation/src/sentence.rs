@@ -13,7 +13,7 @@ use core::iter::Filter;
 
 // All of the logic for forward iteration over sentences
 mod fwd {
-    use tables::sentence::SentenceCat;
+    use crate::tables::sentence::SentenceCat;
     use core::cmp;
 
     // Describe a parsed part of source string as described in this table:
@@ -111,11 +111,11 @@ mod fwd {
         if parts[idx] == StatePart::ClosePlus { idx -= 1 }
 
         if parts[idx] == StatePart::ATerm {
-            use tables::sentence as se;
+            use crate::tables::sentence as se;
 
             for next_char in ahead.chars() {
                 //( ¬(OLetter | Upper | Lower | ParaSep | SATerm) )* Lower
-                match se::sentence_category(next_char) {
+                match se::sentence_category(next_char).2 {
                     se::SC_Lower => return true,
                     se::SC_OLetter |
                     se::SC_Upper |
@@ -176,13 +176,13 @@ mod fwd {
 
         #[inline]
         fn next(&mut self) -> Option<usize> {
-            use tables::sentence as se;
+            use crate::tables::sentence as se;
 
             for next_char in self.string[self.pos..].chars() {
                 let position_before = self.pos;
                 let state_before = self.state.clone();
 
-                let next_cat = se::sentence_category(next_char);
+                let next_cat = se::sentence_category(next_char).2;
 
                 self.pos += next_char.len_utf8();
                 self.state = self.state.next(next_cat);
@@ -274,6 +274,12 @@ mod fwd {
 /// [Alphabetic](http://unicode.org/reports/tr44/#Alphabetic)
 /// property, or with
 /// [General_Category=Number](http://unicode.org/reports/tr44/#General_Category_Values).
+///
+/// This struct is created by the [`unicode_sentences`] method on the [`UnicodeSegmentation`]
+/// trait. See its documentation for more.
+///
+/// [`unicode_sentences`]: trait.UnicodeSegmentation.html#tymethod.unicode_sentences
+/// [`UnicodeSegmentation`]: trait.UnicodeSegmentation.html
 #[derive(Clone)]
 pub struct UnicodeSentences<'a> {
     inner: Filter<USentenceBounds<'a>, fn(&&str) -> bool>,
@@ -281,6 +287,12 @@ pub struct UnicodeSentences<'a> {
 
 /// External iterator for a string's
 /// [sentence boundaries](http://www.unicode.org/reports/tr29/#Sentence_Boundaries).
+///
+/// This struct is created by the [`split_sentence_bounds`] method on the [`UnicodeSegmentation`]
+/// trait. See its documentation for more.
+///
+/// [`split_sentence_bounds`]: trait.UnicodeSegmentation.html#tymethod.split_sentence_bounds
+/// [`UnicodeSegmentation`]: trait.UnicodeSegmentation.html
 #[derive(Clone)]
 pub struct USentenceBounds<'a> {
     iter: fwd::SentenceBreaks<'a>,
@@ -288,6 +300,12 @@ pub struct USentenceBounds<'a> {
 }
 
 /// External iterator for sentence boundaries and byte offsets.
+///
+/// This struct is created by the [`split_sentence_bound_indices`] method on the
+/// [`UnicodeSegmentation`] trait. See its documentation for more.
+///
+/// [`split_sentence_bound_indices`]: trait.UnicodeSegmentation.html#tymethod.split_sentence_bound_indices
+/// [`UnicodeSegmentation`]: trait.UnicodeSegmentation.html
 #[derive(Clone)]
 pub struct USentenceBoundIndices<'a> {
     start_offset: usize,
@@ -313,7 +331,7 @@ pub fn new_sentence_bound_indices<'a>(source: &'a str) -> USentenceBoundIndices<
 #[inline]
 pub fn new_unicode_sentences<'b>(s: &'b str) -> UnicodeSentences<'b> {
     use super::UnicodeSegmentation;
-    use tables::util::is_alphanumeric;
+    use crate::tables::util::is_alphanumeric;
 
     fn has_alphanumeric(s: &&str) -> bool { s.chars().any(|c| is_alphanumeric(c)) }
     let has_alphanumeric: fn(&&str) -> bool = has_alphanumeric; // coerce to fn pointer

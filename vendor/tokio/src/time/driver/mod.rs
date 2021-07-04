@@ -20,34 +20,35 @@ use crate::park::{Park, Unpark};
 use crate::time::{wheel, Error};
 use crate::time::{Clock, Duration, Instant};
 
-use std::sync::atomic::Ordering::SeqCst;
+use std::sync::atomic::Ordering::{Acquire, Relaxed, Release, SeqCst};
+
 use std::sync::Arc;
 use std::usize;
 use std::{cmp, fmt};
 
-/// Time implementation that drives [`Delay`], [`Interval`], and [`Timeout`].
+/// Time implementation that drives [`Delay`][delay], [`Interval`][interval], and [`Timeout`][timeout].
 ///
 /// A `Driver` instance tracks the state necessary for managing time and
-/// notifying the [`Delay`] instances once their deadlines are reached.
+/// notifying the [`Delay`][delay] instances once their deadlines are reached.
 ///
-/// It is expected that a single instance manages many individual [`Delay`]
+/// It is expected that a single instance manages many individual [`Delay`][delay]
 /// instances. The `Driver` implementation is thread-safe and, as such, is able
 /// to handle callers from across threads.
 ///
-/// After creating the `Driver` instance, the caller must repeatedly call
-/// [`turn`]. The time driver will perform no work unless [`turn`] is called
-/// repeatedly.
+/// After creating the `Driver` instance, the caller must repeatedly call `park`
+/// or `park_timeout`. The time driver will perform no work unless `park` or
+/// `park_timeout` is called repeatedly.
 ///
 /// The driver has a resolution of one millisecond. Any unit of time that falls
 /// between milliseconds are rounded up to the next millisecond.
 ///
-/// When an instance is dropped, any outstanding [`Delay`] instance that has not
+/// When an instance is dropped, any outstanding [`Delay`][delay] instance that has not
 /// elapsed will be notified with an error. At this point, calling `poll` on the
-/// [`Delay`] instance will result in `Err` being returned.
+/// [`Delay`][delay] instance will result in panic.
 ///
 /// # Implementation
 ///
-/// THe time driver is based on the [paper by Varghese and Lauck][paper].
+/// The time driver is based on the [paper by Varghese and Lauck][paper].
 ///
 /// A hashed timing wheel is a vector of slots, where each slot handles a time
 /// slice. As time progresses, the timer walks over the slot for the current
@@ -72,11 +73,16 @@ use std::{cmp, fmt};
 /// When the timer processes entries at level zero, it will notify all the
 /// `Delay` instances as their deadlines have been reached. For all higher
 /// levels, all entries will be redistributed across the wheel at the next level
-/// down. Eventually, as time progresses, entries will [`Delay`] instances will
+/// down. Eventually, as time progresses, entries will [`Delay`][delay] instances will
 /// either be canceled (dropped) or their associated entries will reach level
 /// zero and be notified.
+///
+/// [paper]: http://www.cs.columbia.edu/~nahum/w6998/papers/ton97-timing-wheels.pdf
+/// [delay]: crate::time::Delay
+/// [timeout]: crate::time::Timeout
+/// [interval]: crate::time::Interval
 #[derive(Debug)]
-pub(crate) struct Driver<T> {
+pub(crate) struct Driver<T: Park> {
     /// Shared state
     inner: Arc<Inner>,
 
@@ -88,6 +94,9 @@ pub(crate) struct Driver<T> {
 
     /// Source of "now" instances
     clock: Clock,
+
+    /// True if the driver is being shutdown
+    is_shutdown: bool,
 }
 
 /// Timer state shared between `Driver`, `Handle`, and `Registration`.
@@ -118,7 +127,7 @@ where
     T: Park,
 {
     /// Creates a new `Driver` instance that uses `park` to block the current
-    /// thread and `now` to get the current `Instant`.
+    /// thread and `clock` to get the current `Instant`.
     ///
     /// Specifying the source of time is useful when testing.
     pub(crate) fn new(park: T, clock: Clock) -> Driver<T> {
@@ -129,6 +138,7 @@ where
             wheel: wheel::Wheel::new(),
             park,
             clock,
+            is_shutdown: false,
         }
     }
 
@@ -219,7 +229,7 @@ where
                 // The entry's deadline is invalid, so error it and update the
                 // internal state accordingly.
                 entry.set_when_internal(None);
-                entry.error();
+                entry.error(Error::invalid());
             }
         }
     }
@@ -247,7 +257,7 @@ where
                 if deadline > now {
                     let dur = deadline - now;
 
-                    if self.clock.is_frozen() {
+                    if self.clock.is_paused() {
                         self.park.park_timeout(Duration::from_secs(0))?;
                         self.clock.advance(dur);
                     } else {
@@ -278,7 +288,7 @@ where
                 if deadline > now {
                     let duration = cmp::min(deadline - now, duration);
 
-                    if self.clock.is_frozen() {
+                    if self.clock.is_paused() {
                         self.park.park_timeout(Duration::from_secs(0))?;
                         self.clock.advance(duration);
                     } else {
@@ -297,10 +307,12 @@ where
 
         Ok(())
     }
-}
 
-impl<T> Drop for Driver<T> {
-    fn drop(&mut self) {
+    fn shutdown(&mut self) {
+        if self.is_shutdown {
+            return;
+        }
+
         use std::u64;
 
         // Shutdown the stack of entries to process, preventing any new entries
@@ -311,8 +323,21 @@ impl<T> Drop for Driver<T> {
         let mut poll = wheel::Poll::new(u64::MAX);
 
         while let Some(entry) = self.wheel.poll(&mut poll, &mut ()) {
-            entry.error();
+            entry.error(Error::shutdown());
         }
+
+        self.park.shutdown();
+
+        self.is_shutdown = true;
+    }
+}
+
+impl<T> Drop for Driver<T>
+where
+    T: Park,
+{
+    fn drop(&mut self) {
+        self.shutdown();
     }
 }
 
@@ -333,28 +358,32 @@ impl Inner {
         self.elapsed.load(SeqCst)
     }
 
+    #[cfg(all(test, loom))]
+    fn num(&self, ordering: std::sync::atomic::Ordering) -> usize {
+        self.num.load(ordering)
+    }
+
     /// Increments the number of active timeouts
     fn increment(&self) -> Result<(), Error> {
-        let mut curr = self.num.load(SeqCst);
-
+        let mut curr = self.num.load(Relaxed);
         loop {
             if curr == MAX_TIMEOUTS {
                 return Err(Error::at_capacity());
             }
 
-            let actual = self.num.compare_and_swap(curr, curr + 1, SeqCst);
-
-            if curr == actual {
-                return Ok(());
+            match self
+                .num
+                .compare_exchange_weak(curr, curr + 1, Release, Relaxed)
+            {
+                Ok(_) => return Ok(()),
+                Err(next) => curr = next,
             }
-
-            curr = actual;
         }
     }
 
     /// Decrements the number of active timeouts
     fn decrement(&self) {
-        let prev = self.num.fetch_sub(1, SeqCst);
+        let prev = self.num.fetch_sub(1, Acquire);
         debug_assert!(prev <= MAX_TIMEOUTS);
     }
 
@@ -381,3 +410,6 @@ impl fmt::Debug for Inner {
         fmt.debug_struct("Inner").finish()
     }
 }
+
+#[cfg(all(test, loom))]
+mod tests;

@@ -1,6 +1,8 @@
 use core_foundation_sys::array::CFArrayRef;
 use core_foundation_sys::base::CFAllocatorRef;
-use core_foundation_sys::base::{Boolean, CFTypeRef, OSStatus};
+#[cfg(target_os = "macos")]
+use core_foundation_sys::base::CFTypeRef;
+use core_foundation_sys::base::{Boolean, OSStatus};
 use std::os::raw::{c_char, c_int, c_void};
 
 use crate::cipher_suite::SSLCipherSuite;
@@ -266,4 +268,6 @@ extern "C" {
     pub fn SSLSetALPNProtocols(context: SSLContextRef, protocols: CFArrayRef) -> OSStatus;
     #[cfg(feature = "OSX_10_13")]
     pub fn SSLCopyALPNProtocols(context: SSLContextRef, protocols: *mut CFArrayRef) -> OSStatus;
+    #[cfg(feature = "OSX_10_13")]
+    pub fn SSLSetSessionTicketsEnabled(context: SSLContextRef, enabled: Boolean) -> OSStatus;
 }

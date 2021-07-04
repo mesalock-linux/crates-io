@@ -149,6 +149,7 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 use std::usize;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
+use tracing_futures::Instrument;
 
 /// Initializes new HTTP/2.0 streams on a connection by sending a request.
 ///
@@ -1115,7 +1116,10 @@ where
     T: AsyncRead + AsyncWrite + Unpin,
 {
     let builder = Builder::new();
-    builder.handshake(io).await
+    builder
+        .handshake(io)
+        .instrument(tracing::trace_span!("client_handshake", io = %std::any::type_name::<T>()))
+        .await
 }
 
 // ===== impl Connection =====
@@ -1129,12 +1133,12 @@ where
         mut io: T,
         builder: Builder,
     ) -> Result<(SendRequest<B>, Connection<T, B>), crate::Error> {
-        log::debug!("binding client connection");
+        tracing::debug!("binding client connection");
 
         let msg: &'static [u8] = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
         io.write_all(msg).await.map_err(crate::Error::from_io)?;
 
-        log::debug!("client connection bound");
+        tracing::debug!("client connection bound");
 
         // Create the codec
         let mut codec = Codec::new(io);
@@ -1437,6 +1441,8 @@ impl Peer {
 
 impl proto::Peer for Peer {
     type Poll = Response<()>;
+
+    const NAME: &'static str = "Client";
 
     fn r#dyn() -> proto::DynPeer {
         proto::DynPeer::Client

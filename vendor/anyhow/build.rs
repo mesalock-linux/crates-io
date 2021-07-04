@@ -1,7 +1,13 @@
 use std::env;
 use std::fs;
 use std::path::Path;
-use std::process::{Command, ExitStatus};
+use std::process::{Command, ExitStatus, Stdio};
+use std::str;
+
+#[cfg(all(feature = "backtrace", not(feature = "std")))]
+compile_error! {
+    "`backtrace` feature without `std` feature is not supported"
+}
 
 // This code exercises the surface area that we expect of the std Backtrace
 // type. If the current toolchain is able to compile it, we go ahead and use
@@ -35,12 +41,24 @@ const PROBE: &str = r#"
 "#;
 
 fn main() {
-    if !cfg!(feature = "std") {
-        return;
+    if cfg!(feature = "std") {
+        match compile_probe() {
+            Some(status) if status.success() => println!("cargo:rustc-cfg=backtrace"),
+            _ => {}
+        }
     }
-    match compile_probe() {
-        Some(status) if status.success() => println!("cargo:rustc-cfg=backtrace"),
-        _ => {}
+
+    let rustc = match rustc_minor_version() {
+        Some(rustc) => rustc,
+        None => return,
+    };
+
+    if rustc < 38 {
+        println!("cargo:rustc-cfg=anyhow_no_macro_reexport");
+    }
+
+    if rustc < 51 {
+        println!("cargo:rustc-cfg=anyhow_no_ptr_addr_of");
     }
 }
 
@@ -50,6 +68,7 @@ fn compile_probe() -> Option<ExitStatus> {
     let probefile = Path::new(&out_dir).join("probe.rs");
     fs::write(&probefile, PROBE).ok()?;
     Command::new(rustc)
+        .stderr(Stdio::null())
         .arg("--edition=2018")
         .arg("--crate-name=anyhow_build")
         .arg("--crate-type=lib")
@@ -59,4 +78,15 @@ fn compile_probe() -> Option<ExitStatus> {
         .arg(probefile)
         .status()
         .ok()
+}
+
+fn rustc_minor_version() -> Option<u32> {
+    let rustc = env::var_os("RUSTC")?;
+    let output = Command::new(rustc).arg("--version").output().ok()?;
+    let version = str::from_utf8(&output.stdout).ok()?;
+    let mut pieces = version.split('.');
+    if pieces.next() != Some("rustc 1") {
+        return None;
+    }
+    pieces.next()?.parse().ok()
 }

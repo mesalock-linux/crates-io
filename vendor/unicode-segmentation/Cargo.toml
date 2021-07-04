@@ -11,10 +11,11 @@
 # will likely look very different (and much more reasonable)
 
 [package]
+edition = "2018"
 name = "unicode-segmentation"
-version = "1.6.0"
+version = "1.8.0"
 authors = ["kwantam <kwantam@gmail.com>", "Manish Goregaokar <manishsmail@gmail.com>"]
-exclude = ["target/*", "Cargo.lock", "scripts/tmp", "*.txt"]
+exclude = ["target/*", "Cargo.lock", "scripts/tmp", "benches/texts/*", "*.txt"]
 description = "This crate provides Grapheme Cluster, Word and Sentence boundaries\naccording to Unicode Standard Annex #29 rules.\n"
 homepage = "https://github.com/unicode-rs/unicode-segmentation"
 documentation = "https://unicode-rs.github.io/unicode-segmentation"
@@ -22,6 +23,21 @@ readme = "README.md"
 keywords = ["text", "unicode", "grapheme", "word", "boundary"]
 license = "MIT/Apache-2.0"
 repository = "https://github.com/unicode-rs/unicode-segmentation"
+
+[[bench]]
+name = "graphemes"
+harness = false
+
+[[bench]]
+name = "unicode_words"
+harness = false
+
+[[bench]]
+name = "word_bounds"
+harness = false
+[dev-dependencies.criterion]
+version = "0.3"
+
 [dev-dependencies.quickcheck]
 version = "0.7"
 

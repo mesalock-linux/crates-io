@@ -65,7 +65,7 @@ pub(crate) enum Parse {
 
 #[derive(Debug, PartialEq)]
 pub(crate) enum User {
-    /// Error calling user's Payload::poll_data().
+    /// Error calling user's HttpBody::poll_data().
     Body,
     /// Error calling user's MakeService.
     MakeService,
@@ -90,6 +90,10 @@ pub(crate) enum User {
     /// User polled for an upgrade, but low-level API is not using upgrades.
     ManualUpgrade,
 }
+
+// Sentinel type to indicate the error was caused by a timeout.
+#[derive(Debug)]
+pub(crate) struct TimedOut;
 
 impl Error {
     /// Returns true if this was an HTTP parse error.
@@ -133,6 +137,11 @@ impl Error {
         self.inner.kind == Kind::BodyWriteAborted
     }
 
+    /// Returns true if the error was caused by a timeout.
+    pub fn is_timeout(&self) -> bool {
+        self.find_source::<TimedOut>().is_some()
+    }
+
     /// Consumes the error, returning its cause.
     pub fn into_cause(self) -> Option<Box<dyn StdError + Send + Sync>> {
         self.inner.cause
@@ -153,19 +162,25 @@ impl Error {
         &self.inner.kind
     }
 
-    pub(crate) fn h2_reason(&self) -> h2::Reason {
-        // Find an h2::Reason somewhere in the cause stack, if it exists,
-        // otherwise assume an INTERNAL_ERROR.
+    fn find_source<E: StdError + 'static>(&self) -> Option<&E> {
         let mut cause = self.source();
         while let Some(err) = cause {
-            if let Some(h2_err) = err.downcast_ref::<h2::Error>() {
-                return h2_err.reason().unwrap_or(h2::Reason::INTERNAL_ERROR);
+            if let Some(ref typed) = err.downcast_ref() {
+                return Some(typed);
             }
             cause = err.source();
         }
 
         // else
-        h2::Reason::INTERNAL_ERROR
+        None
+    }
+
+    pub(crate) fn h2_reason(&self) -> h2::Reason {
+        // Find an h2::Reason somewhere in the cause stack, if it exists,
+        // otherwise assume an INTERNAL_ERROR.
+        self.find_source::<h2::Error>()
+            .and_then(|h2_err| h2_err.reason())
+            .unwrap_or(h2::Reason::INTERNAL_ERROR)
     }
 
     pub(crate) fn new_canceled() -> Error {
@@ -301,7 +316,7 @@ impl Error {
             Kind::Http2 => "http2 error",
             Kind::Io => "connection error",
 
-            Kind::User(User::Body) => "error from user's Payload stream",
+            Kind::User(User::Body) => "error from user's HttpBody stream",
             Kind::User(User::MakeService) => "error from user's MakeService",
             Kind::User(User::Service) => "error from user's Service",
             Kind::User(User::UnexpectedHeader) => "user sent unexpected header",
@@ -396,6 +411,16 @@ impl From<http::uri::InvalidUriParts> for Parse {
 trait AssertSendSync: Send + Sync + 'static {}
 #[doc(hidden)]
 impl AssertSendSync for Error {}
+
+// ===== impl TimedOut ====
+
+impl fmt::Display for TimedOut {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("operation timed out")
+    }
+}
+
+impl StdError for TimedOut {}
 
 #[cfg(test)]
 mod tests {

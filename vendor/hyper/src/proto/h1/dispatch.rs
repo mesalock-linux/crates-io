@@ -5,7 +5,7 @@ use http::{Request, Response, StatusCode};
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use super::{Http1Transaction, Wants};
-use crate::body::{Body, Payload};
+use crate::body::{Body, HttpBody};
 use crate::common::{task, Future, Never, Pin, Poll, Unpin};
 use crate::proto::{
     BodyLength, Conn, DecodedLength, Dispatched, MessageHead, RequestHead, RequestLine,
@@ -13,7 +13,7 @@ use crate::proto::{
 };
 use crate::service::HttpService;
 
-pub(crate) struct Dispatcher<D, Bs: Payload, I, T> {
+pub(crate) struct Dispatcher<D, Bs: HttpBody, I, T> {
     conn: Conn<I, Bs::Data, T>,
     dispatch: D,
     body_tx: Option<crate::body::Sender>,
@@ -58,7 +58,8 @@ where
     D::PollError: Into<Box<dyn StdError + Send + Sync>>,
     I: AsyncRead + AsyncWrite + Unpin,
     T: Http1Transaction + Unpin,
-    Bs: Payload,
+    Bs: HttpBody + 'static,
+    Bs::Error: Into<Box<dyn StdError + Send + Sync>>,
 {
     pub fn new(dispatch: D, conn: Conn<I, Bs::Data, T>) -> Self {
         Dispatcher {
@@ -186,9 +187,9 @@ where
                         Poll::Ready(Err(_canceled)) => {
                             // user doesn't care about the body
                             // so we should stop reading
-                            trace!("body receiver dropped before eof, closing");
-                            self.conn.close_read();
-                            return Poll::Ready(Ok(()));
+                            trace!("body receiver dropped before eof, draining or closing");
+                            self.conn.poll_drain_or_close_read(cx);
+                            continue;
                         }
                     }
                     match self.conn.poll_read_body(cx) {
@@ -337,7 +338,7 @@ where
                             *clear_body = true;
                             if chunk.remaining() == 0 {
                                 trace!("discarding empty chunk");
-                                self.conn.end_body();
+                                self.conn.end_body()?;
                             } else {
                                 self.conn.write_body_and_end(chunk);
                             }
@@ -350,7 +351,7 @@ where
                         }
                     } else {
                         *clear_body = true;
-                        self.conn.end_body();
+                        self.conn.end_body()?;
                     }
                 } else {
                     return Poll::Pending;
@@ -400,7 +401,8 @@ where
     D::PollError: Into<Box<dyn StdError + Send + Sync>>,
     I: AsyncRead + AsyncWrite + Unpin,
     T: Http1Transaction + Unpin,
-    Bs: Payload,
+    Bs: HttpBody + 'static,
+    Bs::Error: Into<Box<dyn StdError + Send + Sync>>,
 {
     type Output = crate::Result<Dispatched>;
 
@@ -459,7 +461,7 @@ impl<S, Bs> Dispatch for Server<S, Body>
 where
     S: HttpService<Body, ResBody = Bs>,
     S::Error: Into<Box<dyn StdError + Send + Sync>>,
-    Bs: Payload,
+    Bs: HttpBody,
 {
     type PollItem = MessageHead<StatusCode>;
     type PollBody = Bs;
@@ -530,7 +532,7 @@ impl<B> Client<B> {
 
 impl<B> Dispatch for Client<B>
 where
-    B: Payload,
+    B: HttpBody,
 {
     type PollItem = RequestHead;
     type PollBody = B;

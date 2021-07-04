@@ -20,12 +20,12 @@ use std::io::{self, BufRead};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
-use gitignore::{self, Gitignore, GitignoreBuilder};
-use overrides::{self, Override};
-use pathutil::{is_hidden, strip_prefix};
-use types::{self, Types};
-use walk::DirEntry;
-use {Error, Match, PartialErrorBuilder};
+use crate::gitignore::{self, Gitignore, GitignoreBuilder};
+use crate::overrides::{self, Override};
+use crate::pathutil::{is_hidden, strip_prefix};
+use crate::types::{self, Types};
+use crate::walk::DirEntry;
+use crate::{Error, Match, PartialErrorBuilder};
 
 /// IgnoreMatch represents information about where a match came from when using
 /// the `Ignore` matcher.
@@ -310,7 +310,7 @@ impl Ignore {
             git_global_matcher: self.0.git_global_matcher.clone(),
             git_ignore_matcher: gi_matcher,
             git_exclude_matcher: gi_exclude_matcher,
-            has_git: has_git,
+            has_git,
             opts: self.0.opts,
         };
         (ig, errs.into_error_option())
@@ -495,7 +495,7 @@ impl Ignore {
     }
 
     /// Returns an iterator over parent ignore matchers, including this one.
-    pub fn parents(&self) -> Parents {
+    pub fn parents(&self) -> Parents<'_> {
         Parents(Some(self))
     }
 
@@ -581,7 +581,7 @@ impl IgnoreBuilder {
                 .unwrap();
             let (gi, err) = builder.build_global();
             if let Some(err) = err {
-                debug!("{}", err);
+                log::debug!("{}", err);
             }
             gi
         };
@@ -817,9 +817,7 @@ fn resolve_git_commondir(
     let git_commondir_file = || real_git_dir.join("commondir");
     let file = match File::open(git_commondir_file()) {
         Ok(file) => io::BufReader::new(file),
-        Err(err) => {
-            return Err(Some(Error::Io(err).with_path(git_commondir_file())));
-        }
+        Err(_) => return Err(None),
     };
     let commondir_line = match file.lines().next() {
         Some(Ok(line)) => line,
@@ -839,13 +837,13 @@ fn resolve_git_commondir(
 #[cfg(test)]
 mod tests {
     use std::fs::{self, File};
-    use std::io::{self, Write};
+    use std::io::Write;
     use std::path::Path;
 
-    use dir::IgnoreBuilder;
-    use gitignore::Gitignore;
-    use tests::TempDir;
-    use Error;
+    use crate::dir::IgnoreBuilder;
+    use crate::gitignore::Gitignore;
+    use crate::tests::TempDir;
+    use crate::Error;
 
     fn wfile<P: AsRef<Path>>(path: P, contents: &str) {
         let mut file = File::create(path).unwrap();
@@ -1172,22 +1170,9 @@ mod tests {
         // missing commondir file
         assert!(fs::remove_file(commondir_path()).is_ok());
         let (_, err) = ib.add_child(td.path().join("linked-worktree"));
-        assert!(err.is_some());
-        assert!(match err {
-            Some(Error::WithPath { path, err }) => {
-                if path != commondir_path() {
-                    false
-                } else {
-                    match *err {
-                        Error::Io(ioerr) => {
-                            ioerr.kind() == io::ErrorKind::NotFound
-                        }
-                        _ => false,
-                    }
-                }
-            }
-            _ => false,
-        });
+        // We squash the error in this case, because it occurs in repositories
+        // that are not linked worktrees but have submodules.
+        assert!(err.is_none());
 
         wfile(td.path().join("linked-worktree/.git"), "garbage");
         let (_, err) = ib.add_child(td.path().join("linked-worktree"));
@@ -1195,6 +1180,6 @@ mod tests {
 
         wfile(td.path().join("linked-worktree/.git"), "gitdir: garbage");
         let (_, err) = ib.add_child(td.path().join("linked-worktree"));
-        assert!(err.is_some());
+        assert!(err.is_none());
     }
 }

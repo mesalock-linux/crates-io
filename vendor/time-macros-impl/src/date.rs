@@ -33,11 +33,12 @@ impl Parse for Date {
         input.parse::<Token![-]>()?;
 
         // year-week-day
+        #[allow(clippy::manual_strip)]
         let (year, ordinal) = if input.peek(Ident) {
             let week = {
                 let week = input.parse::<Ident>()?;
                 let week_str = week.to_string();
-                if week_str.starts_with("W") {
+                if week_str.starts_with('W') {
                     LitInt::new(&week_str[1..], week.span())
                 } else {
                     return error!(week.span(), "expected week value to start with `W`");
@@ -69,11 +70,9 @@ impl Parse for Date {
             (year, ordinal.value()?)
         };
 
-        // TODO Replace use `LitInt` extension methods when dtolnay/syn#748 is
-        // resolved.
-        if year < -100_000 || year > 100_000 {
-            return error!(year_span, "value must be in the range -100_000..=100_000");
-        }
+        LitInt::create(year)
+            .with_span(year_span)
+            .ensure_in_range(-100_000..=100_000)?;
 
         Ok(Self { year, ordinal })
     }

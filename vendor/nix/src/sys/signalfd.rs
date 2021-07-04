@@ -16,10 +16,10 @@
 //! Please note that signal discarding is not specific to `signalfd`, but also happens with regular
 //! signal handlers.
 use libc;
-use unistd;
-use {Error, Result};
-use errno::Errno;
-pub use sys::signal::{self, SigSet};
+use crate::unistd;
+use crate::{Error, Result};
+use crate::errno::Errno;
+pub use crate::sys::signal::{self, SigSet};
 pub use libc::signalfd_siginfo as siginfo;
 
 use std::os::unix::io::{RawFd, AsRawFd};
@@ -79,7 +79,7 @@ pub fn signalfd(fd: RawFd, mask: &SigSet, flags: SfdFlags) -> Result<RawFd> {
 ///     Err(err) => (), // some error happend
 /// }
 /// ```
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Debug, Eq, Hash, PartialEq)]
 pub struct SignalFd(RawFd);
 
 impl SignalFd {
@@ -116,7 +116,10 @@ impl SignalFd {
 
 impl Drop for SignalFd {
     fn drop(&mut self) {
-        let _ = unistd::close(self.0);
+        let e = unistd::close(self.0);
+        if !std::thread::panicking() && e == Err(Error::Sys(Errno::EBADF)) {
+            panic!("Closing an invalid file descriptor!");
+        };
     }
 }
 

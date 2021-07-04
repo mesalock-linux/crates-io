@@ -7,19 +7,56 @@
 //!
 //! If you don't have need to manage connections yourself, consider using the
 //! higher-level [Server](super) API.
+//!
+//! ## Example
+//! A simple example that uses the `Http` struct to talk HTTP over a Tokio TCP stream
+//! ```no_run
+//! # #[cfg(feature = "runtime")]
+//! # mod rt {
+//! use http::{Request, Response, StatusCode};
+//! use hyper::{server::conn::Http, service::service_fn, Body};
+//! use std::{net::SocketAddr, convert::Infallible};
+//! use tokio::net::TcpListener;
+//!
+//! #[tokio::main]
+//! async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+//!     let addr: SocketAddr = ([127, 0, 0, 1], 8080).into();
+//!
+//!     let mut tcp_listener = TcpListener::bind(addr).await?;
+//!     loop {
+//!         let (tcp_stream, _) = tcp_listener.accept().await?;
+//!         tokio::task::spawn(async move {
+//!             if let Err(http_err) = Http::new()
+//!                     .http1_only(true)
+//!                     .keep_alive(true)
+//!                     .serve_connection(tcp_stream, service_fn(hello))
+//!                     .await {
+//!                 eprintln!("Error while serving HTTP connection: {}", http_err);
+//!             }
+//!         });
+//!     }
+//! }
+//!
+//! async fn hello(_req: Request<Body>) -> Result<Response<Body>, Infallible> {
+//!    Ok(Response::new(Body::from("Hello World!")))
+//! }
+//! # }
+//! ```
 
 use std::error::Error as StdError;
 use std::fmt;
 use std::mem;
 #[cfg(feature = "tcp")]
 use std::net::SocketAddr;
+#[cfg(feature = "runtime")]
+use std::time::Duration;
 
 use bytes::Bytes;
-use pin_project::{pin_project, project};
+use pin_project::pin_project;
 use tokio::io::{AsyncRead, AsyncWrite};
 
 use super::Accept;
-use crate::body::{Body, Payload};
+use crate::body::{Body, HttpBody};
 use crate::common::exec::{Exec, H2Exec, NewSvcExec};
 use crate::common::io::Rewind;
 use crate::common::{task, Future, Pin, Poll, Unpin};
@@ -46,10 +83,10 @@ pub use super::tcp::{AddrIncoming, AddrStream};
 pub struct Http<E = Exec> {
     exec: E,
     h1_half_close: bool,
-    h1_writev: bool,
+    h1_keep_alive: bool,
+    h1_writev: Option<bool>,
     h2_builder: proto::h2::server::Config,
     mode: ConnectionMode,
-    keep_alive: bool,
     max_buf_size: Option<usize>,
     pipeline_flush: bool,
 }
@@ -116,11 +153,11 @@ where
     fallback: Fallback<E>,
 }
 
-#[pin_project]
+#[pin_project(project = ProtoServerProj)]
 pub(super) enum ProtoServer<T, B, S, E = Exec>
 where
     S: HttpService<Body>,
-    B: Payload,
+    B: HttpBody,
 {
     H1(
         #[pin]
@@ -182,10 +219,10 @@ impl Http {
         Http {
             exec: Exec::Default,
             h1_half_close: false,
-            h1_writev: true,
+            h1_keep_alive: true,
+            h1_writev: None,
             h2_builder: Default::default(),
             mode: ConnectionMode::Fallback,
-            keep_alive: true,
             max_buf_size: None,
             pipeline_flush: false,
         }
@@ -218,6 +255,21 @@ impl<E> Http<E> {
         self
     }
 
+    /// Enables or disables HTTP/1 keep-alive.
+    ///
+    /// Default is true.
+    pub fn http1_keep_alive(&mut self, val: bool) -> &mut Self {
+        self.h1_keep_alive = val;
+        self
+    }
+
+    // renamed due different semantics of http2 keep alive
+    #[doc(hidden)]
+    #[deprecated(note = "renamed to `http1_keep_alive`")]
+    pub fn keep_alive(&mut self, val: bool) -> &mut Self {
+        self.http1_keep_alive(val)
+    }
+
     /// Set whether HTTP/1 connections should try to use vectored writes,
     /// or always flatten into a single buffer.
     ///
@@ -225,10 +277,14 @@ impl<E> Http<E> {
     /// but may also improve performance when an IO transport doesn't
     /// support vectored writes well, such as most TLS implementations.
     ///
-    /// Default is `true`.
+    /// Setting this to true will force hyper to use queued strategy
+    /// which may eliminate unnecessary cloning on some TLS backends
+    ///
+    /// Default is `auto`. In this mode hyper will try to guess which
+    /// mode to use
     #[inline]
     pub fn http1_writev(&mut self, val: bool) -> &mut Self {
-        self.h1_writev = val;
+        self.h1_writev = Some(val);
         self
     }
 
@@ -292,6 +348,18 @@ impl<E> Http<E> {
         self
     }
 
+    /// Sets the maximum frame size to use for HTTP2.
+    ///
+    /// Passing `None` will do nothing.
+    ///
+    /// If not set, hyper will use a default.
+    pub fn http2_max_frame_size(&mut self, sz: impl Into<Option<u32>>) -> &mut Self {
+        if let Some(sz) = sz.into() {
+            self.h2_builder.max_frame_size = sz;
+        }
+        self
+    }
+
     /// Sets the [`SETTINGS_MAX_CONCURRENT_STREAMS`][spec] option for HTTP2
     /// connections.
     ///
@@ -303,11 +371,38 @@ impl<E> Http<E> {
         self
     }
 
-    /// Enables or disables HTTP keep-alive.
+    /// Sets an interval for HTTP2 Ping frames should be sent to keep a
+    /// connection alive.
     ///
-    /// Default is true.
-    pub fn keep_alive(&mut self, val: bool) -> &mut Self {
-        self.keep_alive = val;
+    /// Pass `None` to disable HTTP2 keep-alive.
+    ///
+    /// Default is currently disabled.
+    ///
+    /// # Cargo Feature
+    ///
+    /// Requires the `runtime` cargo feature to be enabled.
+    #[cfg(feature = "runtime")]
+    pub fn http2_keep_alive_interval(
+        &mut self,
+        interval: impl Into<Option<Duration>>,
+    ) -> &mut Self {
+        self.h2_builder.keep_alive_interval = interval.into();
+        self
+    }
+
+    /// Sets a timeout for receiving an acknowledgement of the keep-alive ping.
+    ///
+    /// If the ping is not acknowledged within the timeout, the connection will
+    /// be closed. Does nothing if `http2_keep_alive_interval` is disabled.
+    ///
+    /// Default is 20 seconds.
+    ///
+    /// # Cargo Feature
+    ///
+    /// Requires the `runtime` cargo feature to be enabled.
+    #[cfg(feature = "runtime")]
+    pub fn http2_keep_alive_timeout(&mut self, timeout: Duration) -> &mut Self {
+        self.h2_builder.keep_alive_timeout = timeout;
         self
     }
 
@@ -344,10 +439,10 @@ impl<E> Http<E> {
         Http {
             exec,
             h1_half_close: self.h1_half_close,
+            h1_keep_alive: self.h1_keep_alive,
             h1_writev: self.h1_writev,
             h2_builder: self.h2_builder,
             mode: self.mode,
-            keep_alive: self.keep_alive,
             max_buf_size: self.max_buf_size,
             pipeline_flush: self.pipeline_flush,
         }
@@ -385,21 +480,26 @@ impl<E> Http<E> {
     where
         S: HttpService<Body, ResBody = Bd>,
         S::Error: Into<Box<dyn StdError + Send + Sync>>,
-        Bd: Payload,
+        Bd: HttpBody + 'static,
+        Bd::Error: Into<Box<dyn StdError + Send + Sync>>,
         I: AsyncRead + AsyncWrite + Unpin,
         E: H2Exec<S::Future, Bd>,
     {
         let proto = match self.mode {
             ConnectionMode::H1Only | ConnectionMode::Fallback => {
                 let mut conn = proto::Conn::new(io);
-                if !self.keep_alive {
+                if !self.h1_keep_alive {
                     conn.disable_keep_alive();
                 }
                 if self.h1_half_close {
                     conn.set_allow_half_close();
                 }
-                if !self.h1_writev {
-                    conn.set_write_strategy_flatten();
+                if let Some(writev) = self.h1_writev {
+                    if writev {
+                        conn.set_write_strategy_queue();
+                    } else {
+                        conn.set_write_strategy_flatten();
+                    }
                 }
                 conn.set_flush_pipeline(self.pipeline_flush);
                 if let Some(max) = self.max_buf_size {
@@ -433,7 +533,7 @@ impl<E> Http<E> {
         IO: AsyncRead + AsyncWrite + Unpin,
         S: MakeServiceRef<IO, Body, ResBody = Bd>,
         S::Error: Into<Box<dyn StdError + Send + Sync>>,
-        Bd: Payload,
+        Bd: HttpBody,
         E: H2Exec<<S::Service as HttpService<Body>>::Future, Bd>,
     {
         Serve {
@@ -451,21 +551,29 @@ where
     S: HttpService<Body, ResBody = B>,
     S::Error: Into<Box<dyn StdError + Send + Sync>>,
     I: AsyncRead + AsyncWrite + Unpin,
-    B: Payload + 'static,
+    B: HttpBody + 'static,
+    B::Error: Into<Box<dyn StdError + Send + Sync>>,
     E: H2Exec<S::Future, B>,
 {
     /// Start a graceful shutdown process for this connection.
     ///
     /// This `Connection` should continue to be polled until shutdown
     /// can finish.
+    ///
+    /// # Note
+    ///
+    /// This should only be called while the `Connection` future is still
+    /// pending. If called after `Connection::poll` has resolved, this does
+    /// nothing.
     pub fn graceful_shutdown(self: Pin<&mut Self>) {
-        match self.project().conn.as_mut().unwrap() {
-            ProtoServer::H1(ref mut h1) => {
+        match self.project().conn {
+            Some(ProtoServer::H1(ref mut h1)) => {
                 h1.disable_keep_alive();
             }
-            ProtoServer::H2(ref mut h2) => {
+            Some(ProtoServer::H2(ref mut h2)) => {
                 h2.graceful_shutdown();
             }
+            None => (),
         }
     }
 
@@ -589,7 +697,8 @@ where
     S: HttpService<Body, ResBody = B>,
     S::Error: Into<Box<dyn StdError + Send + Sync>>,
     I: AsyncRead + AsyncWrite + Unpin + 'static,
-    B: Payload + 'static,
+    B: HttpBody + 'static,
+    B::Error: Into<Box<dyn StdError + Send + Sync>>,
     E: H2Exec<S::Future, B>,
 {
     type Output = crate::Result<()>;
@@ -656,7 +765,7 @@ where
     IO: AsyncRead + AsyncWrite + Unpin,
     IE: Into<Box<dyn StdError + Send + Sync>>,
     S: MakeServiceRef<IO, Body, ResBody = B>,
-    B: Payload,
+    B: HttpBody,
     E: H2Exec<<S::Service as HttpService<Body>>::Future, B>,
 {
     fn poll_next_(
@@ -693,7 +802,8 @@ where
     I: AsyncRead + AsyncWrite + Unpin,
     F: Future<Output = Result<S, FE>>,
     S: HttpService<Body, ResBody = B>,
-    B: Payload,
+    B: HttpBody + 'static,
+    B::Error: Into<Box<dyn StdError + Send + Sync>>,
     E: H2Exec<S::Future, B>,
 {
     type Output = Result<Connection<I, S, E>, FE>;
@@ -727,7 +837,7 @@ where
     IE: Into<Box<dyn StdError + Send + Sync>>,
     IO: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     S: MakeServiceRef<IO, Body, ResBody = B>,
-    B: Payload,
+    B: HttpBody,
     E: H2Exec<<S::Service as HttpService<Body>>::Future, B>,
 {
     pub(super) fn poll_watch<W>(
@@ -763,17 +873,16 @@ where
     T: AsyncRead + AsyncWrite + Unpin,
     S: HttpService<Body, ResBody = B>,
     S::Error: Into<Box<dyn StdError + Send + Sync>>,
-    B: Payload,
+    B: HttpBody + 'static,
+    B::Error: Into<Box<dyn StdError + Send + Sync>>,
     E: H2Exec<S::Future, B>,
 {
     type Output = crate::Result<proto::Dispatched>;
 
-    #[project]
     fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
-        #[project]
         match self.project() {
-            ProtoServer::H1(s) => s.poll(cx),
-            ProtoServer::H2(s) => s.poll(cx),
+            ProtoServerProj::H1(s) => s.poll(cx),
+            ProtoServerProj::H2(s) => s.poll(cx),
         }
     }
 }
@@ -783,11 +892,11 @@ pub(crate) mod spawn_all {
     use tokio::io::{AsyncRead, AsyncWrite};
 
     use super::{Connecting, UpgradeableConnection};
-    use crate::body::{Body, Payload};
+    use crate::body::{Body, HttpBody};
     use crate::common::exec::H2Exec;
     use crate::common::{task, Future, Pin, Poll, Unpin};
     use crate::service::HttpService;
-    use pin_project::{pin_project, project};
+    use pin_project::pin_project;
 
     // Used by `SpawnAll` to optionally watch a `Connection` future.
     //
@@ -812,6 +921,8 @@ pub(crate) mod spawn_all {
         I: AsyncRead + AsyncWrite + Unpin + Send + 'static,
         S: HttpService<Body>,
         E: H2Exec<S::Future, S::ResBody>,
+        S::ResBody: 'static,
+        <S::ResBody as HttpBody>::Error: Into<Box<dyn StdError + Send + Sync>>,
     {
         type Future = UpgradeableConnection<I, S, E>;
 
@@ -837,7 +948,7 @@ pub(crate) mod spawn_all {
         state: State<I, N, S, E, W>,
     }
 
-    #[pin_project]
+    #[pin_project(project = StateProj)]
     pub enum State<I, N, S: HttpService<Body>, E, W: Watcher<I, S, E>> {
         Connecting(#[pin] Connecting<I, N, E>, W),
         Connected(#[pin] W::Future),
@@ -857,13 +968,13 @@ pub(crate) mod spawn_all {
         N: Future<Output = Result<S, NE>>,
         NE: Into<Box<dyn StdError + Send + Sync>>,
         S: HttpService<Body, ResBody = B>,
-        B: Payload,
+        B: HttpBody + 'static,
+        B::Error: Into<Box<dyn StdError + Send + Sync>>,
         E: H2Exec<S::Future, B>,
         W: Watcher<I, S, E>,
     {
         type Output = ();
 
-        #[project]
         fn poll(self: Pin<&mut Self>, cx: &mut task::Context<'_>) -> Poll<Self::Output> {
             // If it weren't for needing to name this type so the `Send` bounds
             // could be projected to the `Serve` executor, this could just be
@@ -872,9 +983,8 @@ pub(crate) mod spawn_all {
             let mut me = self.project();
             loop {
                 let next = {
-                    #[project]
                     match me.state.as_mut().project() {
-                        State::Connecting(connecting, watcher) => {
+                        StateProj::Connecting(connecting, watcher) => {
                             let res = ready!(connecting.poll(cx));
                             let conn = match res {
                                 Ok(conn) => conn,
@@ -887,7 +997,7 @@ pub(crate) mod spawn_all {
                             let connected = watcher.watch(conn.with_upgrades());
                             State::Connected(connected)
                         }
-                        State::Connected(future) => {
+                        StateProj::Connected(future) => {
                             return future.poll(cx).map(|res| {
                                 if let Err(err) = res {
                                     debug!("connection error: {}", err);
@@ -924,7 +1034,8 @@ mod upgrades {
         S: HttpService<Body, ResBody = B>,
         S::Error: Into<Box<dyn StdError + Send + Sync>>,
         I: AsyncRead + AsyncWrite + Unpin,
-        B: Payload + 'static,
+        B: HttpBody + 'static,
+        B::Error: Into<Box<dyn StdError + Send + Sync>>,
         E: H2Exec<S::Future, B>,
     {
         /// Start a graceful shutdown process for this connection.
@@ -941,7 +1052,8 @@ mod upgrades {
         S: HttpService<Body, ResBody = B>,
         S::Error: Into<Box<dyn StdError + Send + Sync>>,
         I: AsyncRead + AsyncWrite + Unpin + Send + 'static,
-        B: Payload + 'static,
+        B: HttpBody + 'static,
+        B::Error: Into<Box<dyn StdError + Send + Sync>>,
         E: super::H2Exec<S::Future, B>,
     {
         type Output = crate::Result<()>;
