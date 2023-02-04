@@ -52,7 +52,7 @@ webpki               = "0.21.0"
 webpki-roots         = "0.21.0"
 yasna                = "0.3.0"
 
-tokio           = "0.2"
+tokio           = "1.18"
 tokio-util      = "0.3"
 futures         = "0.3"
 futures-util    = "0.3.0"
